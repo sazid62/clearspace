@@ -1,0 +1,242 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Disk Cleaner</title>
+<style>
+  :root {
+    --bg: #f6f6f4; --panel: #ffffff; --text: #1d1d1b; --muted: #6b6b66; --line: #e4e3df;
+    --accent: #2f6fde; --danger: #c93a2e; --safe: #1f8a4c; --check: #b07400; --bar: #dfe7f7; --barfill: #2f6fde;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #161615; --panel: #1f1f1d; --text: #ecebe7; --muted: #9a9993; --line: #33332f;
+      --accent: #6b9cf0; --danger: #ec6a5c; --safe: #4cc07e; --check: #e0a83a; --bar: #26324a; --barfill: #6b9cf0;
+    }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; font: 14px/1.45 -apple-system, BlinkMacSystemFont, "SF Pro Text", sans-serif; background: var(--bg); color: var(--text); }
+  header { position: sticky; top: 0; z-index: 5; background: var(--panel); border-bottom: 1px solid var(--line); padding: 14px 20px; }
+  h1 { font-size: 17px; margin: 0 0 8px; }
+  .disk { display: flex; align-items: center; gap: 12px; font-size: 13px; color: var(--muted); }
+  .diskbar { flex: 1; height: 10px; background: var(--bar); border-radius: 5px; overflow: hidden; max-width: 420px; }
+  .diskbar div { height: 100%; background: var(--danger); }
+  .actions { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-top: 10px; }
+  .sel { font-weight: 600; margin-right: auto; }
+  button { font: inherit; border: 1px solid var(--line); background: var(--panel); color: var(--text); padding: 6px 12px; border-radius: 6px; cursor: pointer; }
+  button:hover:not(:disabled) { border-color: var(--muted); }
+  button:disabled { opacity: .45; cursor: default; }
+  button.danger { background: var(--danger); border-color: var(--danger); color: #fff; }
+  nav { display: flex; gap: 4px; padding: 10px 20px 0; }
+  nav button { border-radius: 6px 6px 0 0; border-bottom: none; }
+  nav button.on { background: var(--panel); font-weight: 600; }
+  main { padding: 0 20px 40px; }
+  .panel { background: var(--panel); border: 1px solid var(--line); border-radius: 0 8px 8px 8px; padding: 6px 0; }
+  .row { display: grid; grid-template-columns: 22px 22px 90px 1fr; align-items: center; gap: 6px; padding: 4px 12px; border-bottom: 1px solid var(--line); }
+  .row:last-child { border-bottom: none; }
+  .row:hover { background: color-mix(in srgb, var(--accent) 6%, transparent); }
+  .caret { cursor: pointer; color: var(--muted); text-align: center; user-select: none; }
+  .size { font-variant-numeric: tabular-nums; text-align: right; font-weight: 600; }
+  .name { min-width: 0; }
+  .name .t { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .name .p { font-size: 12px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .name .note { font-size: 12px; color: var(--muted); }
+  .minibar { height: 3px; background: var(--bar); border-radius: 2px; margin-top: 3px; }
+  .minibar div { height: 100%; background: var(--barfill); border-radius: 2px; }
+  .tag { display: inline-block; font-size: 11px; font-weight: 600; padding: 0 6px; border-radius: 4px; margin-left: 6px; }
+  .tag.safe { color: var(--safe); border: 1px solid var(--safe); }
+  .tag.check { color: var(--check); border: 1px solid var(--check); }
+  .other { color: var(--muted); font-style: italic; }
+  .toolbar { display: flex; gap: 8px; padding: 8px 12px; border-bottom: 1px solid var(--line); }
+  .toolbar input { flex: 1; font: inherit; padding: 5px 8px; border: 1px solid var(--line); border-radius: 6px; background: var(--bg); color: var(--text); }
+  .msg { padding: 40px; text-align: center; color: var(--muted); }
+  .log { margin-top: 12px; font-size: 13px; }
+  .log .ok { color: var(--safe); } .log .bad { color: var(--danger); }
+  .hint { font-size: 12px; color: var(--muted); padding: 8px 12px; border-bottom: 1px solid var(--line); }
+  input[type=checkbox] { width: 16px; height: 16px; margin: 0; }
+  @media (max-width: 600px) {
+    header, main, nav { padding-left: 16px; padding-right: 16px; }
+    .row { grid-template-columns: 22px 20px 72px 1fr; padding: 4px 8px; }
+  }
+</style>
+</head>
+<body>
+<header>
+  <h1>Disk Cleaner</h1>
+  <div class="disk"><div class="diskbar"><div id="diskfill"></div></div><span id="disktext">…</span></div>
+  <div class="actions">
+    <span class="sel" id="seltext">Nothing selected</span>
+    <button id="clear" disabled>Clear selection</button>
+    <button id="trash" disabled title="Moves to Trash — does NOT free space until you empty the Trash">Move to Trash</button>
+    <button id="del" class="danger" disabled>Delete permanently</button>
+    <button id="rescan">Rescan</button>
+  </div>
+</header>
+<nav>
+  <button data-tab="sugg" class="on">Suggestions</button>
+  <button data-tab="tree">Folders</button>
+  <button data-tab="files">Biggest files</button>
+</nav>
+<main>
+  <div class="panel" id="view"><div class="msg">Scanning…</div></div>
+  <div class="log" id="log"></div>
+</main>
+<script>
+const $ = (s) => document.querySelector(s);
+const GB = 1024 ** 3, MB = 1024 ** 2;
+const fmt = (b) => b >= GB ? (b / GB).toFixed(2) + " GB" : (b / MB).toFixed(0) + " MB";
+let data = null, tab = "sugg", filter = "";
+const selected = new Map(); // path -> size
+const open = new Set();
+
+function esc(s) { return s.replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c])); }
+function short(p) { return data && p.startsWith(data.home) ? "~" + p.slice(data.home.length) : p; }
+
+function showDisk(d) {
+  $("#diskfill").style.width = (d.used / d.total * 100).toFixed(1) + "%";
+  $("#disktext").textContent = `${fmt(d.free)} free of ${fmt(d.total)}`;
+}
+
+function selectedTotal() {
+  const paths = [...selected.keys()].sort((a, b) => a.length - b.length);
+  const kept = [];
+  for (const p of paths) if (!kept.some((k) => p.startsWith(k + "/"))) kept.push(p);
+  return { count: kept.length, size: kept.reduce((t, p) => t + selected.get(p), 0), paths: kept };
+}
+
+function refreshSel() {
+  const { count, size } = selectedTotal();
+  $("#seltext").textContent = count ? `${count} selected · ${fmt(size)}` : "Nothing selected";
+  for (const id of ["#clear", "#trash", "#del"]) $(id).disabled = !count;
+}
+
+function row({ path, size, max, title, sub, tag, note, caret = "", indent = 0, other = false }) {
+  const pct = max ? Math.max(1, size / max * 100) : 0;
+  const box = other ? "" : `<input type="checkbox" data-p="${esc(path)}" data-s="${size}" ${selected.has(path) ? "checked" : ""}>`;
+  return `<div class="row">
+    <span>${box}</span>
+    <span class="caret" data-open="${other ? "" : esc(path)}">${caret}</span>
+    <span class="size">${fmt(size)}</span>
+    <span class="name" style="padding-left:${indent * 16}px">
+      <div class="t ${other ? "other" : ""}">${esc(title)}${tag ? `<span class="tag ${tag}">${tag === "safe" ? "Safe to delete" : "Check first"}</span>` : ""}</div>
+      ${sub ? `<div class="p" title="${esc(path)}">${esc(sub)}</div>` : ""}
+      ${note ? `<div class="note">${esc(note)}</div>` : ""}
+      <div class="minibar"><div style="width:${pct}%"></div></div>
+    </span>
+  </div>`;
+}
+
+function renderSugg() {
+  const s = data.suggestions;
+  if (!s.length) return `<div class="msg">No suggestions left.</div>`;
+  const max = s[0].s;
+  const total = s.filter((x) => x.safety === "safe").reduce((t, x) => t + x.s, 0);
+  return `<div class="hint">Known caches and leftovers. Items marked <b>Safe to delete</b> (${fmt(total)}) come back on their own when needed. Quit Chrome/Brave before deleting their items.</div>` +
+    s.map((x) => row({ path: x.p, size: x.s, max, title: x.label, sub: short(x.p), tag: x.safety, note: x.note })).join("");
+}
+
+function renderTree() {
+  const out = [`<div class="hint">Click ▸ to open a folder. Everything is sorted biggest first; items under 20 MB are grouped as “small items”.</div>`];
+  const max = data.tree.c[0] ? data.tree.c[0].s : 1;
+  const walk = (n, depth) => {
+    for (const c of n.c) {
+      const isOpen = open.has(c.p);
+      out.push(row({ path: c.p, size: c.s, max, title: c.n + (c.d ? "/" : ""), sub: depth === 0 ? short(c.p) : "", caret: c.d && (c.c.length || c.o) ? (isOpen ? "▾" : "▸") : "", indent: depth }));
+      if (c.d && isOpen) walk(c, depth + 1);
+    }
+    if (n.o > 0 && depth > 0) out.push(row({ path: "", size: n.o, max, title: "small items (under 20 MB each)", indent: depth, other: true }));
+  };
+  walk(data.tree, 0);
+  return out.join("");
+}
+
+function renderFiles() {
+  const q = filter.toLowerCase();
+  const list = data.files.filter((f) => !q || f.p.toLowerCase().includes(q)).slice(0, 1000);
+  const max = list[0] ? list[0].s : 1;
+  return `<div class="toolbar"><input id="q" placeholder="Filter by name or path (e.g. .mov, Downloads, node_modules)" value="${esc(filter)}"></div>` +
+    (list.length ? list.map((f) => row({ path: f.p, size: f.s, max, title: f.p.split("/").pop(), sub: short(f.p) })).join("") : `<div class="msg">No files match.</div>`);
+}
+
+function render() {
+  if (!data) return;
+  const view = $("#view");
+  view.innerHTML = tab === "sugg" ? renderSugg() : tab === "tree" ? renderTree() : renderFiles();
+  const q = $("#q");
+  if (q) { q.focus(); q.setSelectionRange(q.value.length, q.value.length); }
+  refreshSel();
+}
+
+$("#view").addEventListener("change", (e) => {
+  const cb = e.target.closest("input[type=checkbox]");
+  if (!cb) return;
+  if (cb.checked) selected.set(cb.dataset.p, +cb.dataset.s); else selected.delete(cb.dataset.p);
+  refreshSel();
+});
+$("#view").addEventListener("click", (e) => {
+  const c = e.target.closest(".caret");
+  if (!c || !c.dataset.open || !c.textContent) return;
+  open.has(c.dataset.open) ? open.delete(c.dataset.open) : open.add(c.dataset.open);
+  render();
+});
+$("#view").addEventListener("input", (e) => { if (e.target.id === "q") { filter = e.target.value; render(); } });
+document.querySelectorAll("nav button").forEach((b) => b.addEventListener("click", () => {
+  document.querySelectorAll("nav button").forEach((x) => x.classList.toggle("on", x === b));
+  tab = b.dataset.tab; render();
+}));
+$("#clear").onclick = () => { selected.clear(); render(); };
+
+async function remove(trash) {
+  const { count, size, paths } = selectedTotal();
+  const list = paths.slice(0, 15).map(short).join("\n") + (paths.length > 15 ? `\n…and ${paths.length - 15} more` : "");
+  const verb = trash ? "Move to Trash" : "PERMANENTLY DELETE";
+  const extra = trash ? "\n\nNote: space is only freed after you empty the Trash." : "\n\nThis cannot be undone.";
+  if (!confirm(`${verb} ${count} item(s), ${fmt(size)}?\n\n${list}${extra}`)) return;
+  for (const id of ["#trash", "#del"]) $(id).disabled = true;
+  const r = await fetch("/api/delete", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ paths, trash }) });
+  if (!r.ok) { $("#log").innerHTML = `<div class="bad">${esc((await r.json()).error)}</div>`; return refreshSel(); }
+  selected.clear();
+  watchJob(trash);
+}
+
+// Big folders take minutes to delete; show live progress until the server is done.
+async function watchJob(trash) {
+  const s = await fetch("/api/status").then((x) => x.json());
+  const job = s.job;
+  showDisk(s.disk);
+  if (job.running) {
+    $("#log").innerHTML = `<b>${trash ? "Moving" : "Deleting"} ${Math.min(job.done + 1, job.total || 1)} of ${job.total || "…"}</b>` +
+      (job.current ? `: ${esc(short(job.current))}` : "") +
+      (trash ? "" : ` · <span class="ok">${fmt(job.freed || 0)} freed so far</span>`) +
+      `<div class="hint" style="padding:4px 0;border:none">Large folders take a few minutes. You can leave this page open.</div>`;
+    return setTimeout(() => watchJob(trash), 1000);
+  }
+  const ok = job.results.filter((x) => x.ok), bad = job.results.filter((x) => !x.ok);
+  $("#log").innerHTML = `<div class="ok">${trash ? "Moved" : "Deleted"} ${ok.length} item(s)${trash ? "" : ` · ${fmt(job.freed || 0)} freed`}.</div>` +
+    bad.map((x) => `<div class="bad">Failed: ${esc(short(x.p))} — ${esc(x.err)}</div>`).join("");
+  await load();
+}
+$("#trash").onclick = () => remove(true);
+$("#del").onclick = () => remove(false);
+$("#rescan").onclick = async () => { await fetch("/api/rescan", { method: "POST" }); data = null; poll(); };
+
+async function load() {
+  data = await fetch("/api/data").then((r) => r.json());
+  showDisk(data.disk);
+  render();
+}
+async function poll() {
+  const s = await fetch("/api/status").then((r) => r.json());
+  showDisk(s.disk);
+  if (s.scanning) {
+    $("#view").innerHTML = `<div class="msg">Scanning… ${s.files.toLocaleString()} files checked</div>`;
+    return setTimeout(poll, 700);
+  }
+  if (s.job.running) watchJob(s.job.trash);
+  load();
+}
+poll();
+</script>
+</body>
+</html>
