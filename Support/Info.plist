@@ -19,26 +19,26 @@
 	<key>CFBundlePackageType</key>
 	<string>APPL</string>
 	<key>CFBundleShortVersionString</key>
-	<string>1.0.0</string>
+	<string>1.1.0</string>
 	<key>CFBundleVersion</key>
-	<string>1</string>
+	<string>2</string>
 	<key>LSApplicationCategoryType</key>
 	<string>public.app-category.utilities</string>
 	<key>LSMinimumSystemVersion</key>
 	<string>14.0</string>
-	<key>NSHighResolutionCapable</key>
-	<true/>
-	<key>NSPrincipalClass</key>
-	<string>NSApplication</string>
-	<key>NSHumanReadableCopyright</key>
-	<string>© 2026 sazid62</string>
+	<key>NSAppleEventsUsageDescription</key>
+	<string>Clearspace uses the administrator prompt to remove items you don't have permission to delete.</string>
 	<key>NSDesktopFolderUsageDescription</key>
 	<string>Clearspace measures your Desktop folder to show what is using disk space.</string>
 	<key>NSDocumentsFolderUsageDescription</key>
 	<string>Clearspace measures your Documents folder to show what is using disk space.</string>
 	<key>NSDownloadsFolderUsageDescription</key>
 	<string>Clearspace measures your Downloads folder to show what is using disk space.</string>
-	<key>NSAppleEventsUsageDescription</key>
-	<string>Clearspace uses the administrator prompt to remove items you don't have permission to delete.</string>
+	<key>NSHighResolutionCapable</key>
+	<true/>
+	<key>NSHumanReadableCopyright</key>
+	<string>© 2026 sazid62</string>
+	<key>NSPrincipalClass</key>
+	<string>NSApplication</string>
 </dict>
 </plist>

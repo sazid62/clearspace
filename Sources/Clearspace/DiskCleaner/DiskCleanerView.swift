@@ -184,7 +184,7 @@ private struct SuggestionsList: View {
         let items = model.visibleSuggestions
         let largest = Double(max(items.first?.size ?? 1, 1))
         VStack(spacing: 0) {
-            ListHint(text: "Known caches and leftovers. Items marked Safe come back on their own when needed. Quit Chrome or Brave before removing theirs.") {
+            ListHint(text: "Caches, project build folders, git worktrees, temp leftovers, videos and downloads. Items marked Safe come back on their own; check the rest before removing. Quit Chrome or Brave before removing theirs.") {
                 if model.safeSuggestionsSize > 0 {
                     Button("Select All Safe (\(Bytes.format(model.safeSuggestionsSize)))") { model.selectSafeSuggestions() }
                 }
@@ -200,7 +200,7 @@ private struct SuggestionsList: View {
                 if items.isEmpty {
                     if model.query.isEmpty {
                         ContentUnavailableView("Nothing to suggest", systemImage: "checkmark.seal",
-                                               description: Text("No known caches or leftovers over 20 MB were found. Try the Folders and Large Files views."))
+                                               description: Text("Nothing over 20 MB worth cleaning was found. Try the Folders and Large Files views."))
                     } else {
                         ContentUnavailableView.search(text: model.query)
                     }

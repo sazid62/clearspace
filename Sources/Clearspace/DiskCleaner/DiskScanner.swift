@@ -41,7 +41,8 @@ struct ScanRoot {
         #endif
         return [ScanRoot(path: FS.home, title: "Home Folder"),
          ScanRoot(path: "/Applications", title: "Applications"),
-         ScanRoot(path: FS.userTempRoot, title: "Temporary Files")]
+         ScanRoot(path: FS.userTempRoot, title: "Temporary Files"),
+         ScanRoot(path: FS.sharedTemp, title: "Shared Temporary Files")]
     }
 }
 
@@ -49,13 +50,17 @@ final class ScanResult {
     let root: FSNode
     private(set) var index: [String: FSNode]
     private(set) var largeFiles: [LargeFile]
+    /// Folder -> marker entries it directly contains (see DiskScanner.markerNames).
+    let markers: [String: Set<String>]
     let fileCount: Int
     let duration: TimeInterval
 
-    init(root: FSNode, index: [String: FSNode], largeFiles: [LargeFile], fileCount: Int, duration: TimeInterval) {
+    init(root: FSNode, index: [String: FSNode], largeFiles: [LargeFile], markers: [String: Set<String>] = [:],
+         fileCount: Int, duration: TimeInterval) {
         self.root = root
         self.index = index
         self.largeFiles = largeFiles
+        self.markers = markers
         self.fileCount = fileCount
         self.duration = duration
     }
@@ -93,6 +98,11 @@ final class ScanResult {
 /// Unchecked Sendable: all state is touched only by the scanning thread, except the lock-guarded cancel flag.
 final class DiskScanner: @unchecked Sendable {
     static let defaultMinimumItemSize: Int64 = 20 * 1024 * 1024
+    /// Entries that tell what a folder is (a project, a git worktree, a Python venv...).
+    /// A `.git` that is a file, not a folder, is recorded as `gitFileMarker`.
+    static let markerNames: Set<String> = ["package.json", "Cargo.toml", "Podfile", "pyvenv.cfg",
+                                           "build.gradle", "build.gradle.kts", "pubspec.yaml"]
+    static let gitFileMarker = ".git (file)"
 
     let roots: [ScanRoot]
     let minimumItemSize: Int64
@@ -101,6 +111,7 @@ final class DiskScanner: @unchecked Sendable {
 
     private var index: [String: FSNode] = [:]
     private var largeFiles: [LargeFile] = []
+    private var markers: [String: Set<String>] = [:]
     private var seen = Set<FileID>()
     private var fileCount = 0
     private var lastReport: CFAbsoluteTime = 0
@@ -132,7 +143,7 @@ final class DiskScanner: @unchecked Sendable {
         root.children.sort { $0.size > $1.size }
         largeFiles.sort { $0.size > $1.size }
         if largeFiles.count > 3000 { largeFiles.removeSubrange(3000...) }
-        return ScanResult(root: root, index: index, largeFiles: largeFiles, fileCount: fileCount,
+        return ScanResult(root: root, index: index, largeFiles: largeFiles, markers: markers, fileCount: fileCount,
                           duration: Date().timeIntervalSince(started))
     }
 
@@ -151,6 +162,11 @@ final class DiskScanner: @unchecked Sendable {
                 // Other volumes mounted inside the tree (e.g. ~/OrbStack) are not this disk.
                 if st.st_dev == device { folders.append((childPath, entryName)) }
                 continue
+            }
+            if entryName == ".git" {
+                if st.st_mode & S_IFMT == S_IFREG { markers[path, default: []].insert(Self.gitFileMarker) }
+            } else if Self.markerNames.contains(entryName) {
+                markers[path, default: []].insert(entryName)
             }
             fileCount += 1
             if fileCount & 1023 == 0 { report(path) }

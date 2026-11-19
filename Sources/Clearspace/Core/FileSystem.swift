@@ -5,6 +5,8 @@ import Foundation
 enum FS {
     static let home = NSHomeDirectory()
     static let trash = home + "/.Trash"
+    /// The machine-wide temp folder (/tmp). Tools like Claude Code, git worktrees and test runs leave folders here.
+    static let sharedTemp = realPath("/tmp")
 
     /// The per-user temp root (parent of DARWIN_USER_TEMP_DIR), which holds T/, C/ and X/.
     static let userTempRoot: String = {
