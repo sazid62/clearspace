@@ -28,6 +28,8 @@ final class UninstallerModel: RemovalHost {
     private(set) var inspected: InstalledApp?
     private(set) var leftovers: [Leftover] = []
     private(set) var leftoverSizes: [String: Int64] = [:]
+    /// The user's settings files that mention the app; shown for editing by hand, never removed.
+    private(set) var mentions: [String] = []
     private(set) var isSearching = false
     private(set) var checked: Set<String> = []
     private(set) var isAppRunning = false
@@ -58,16 +60,26 @@ final class UninstallerModel: RemovalHost {
         Task.detached(priority: .userInitiated) {
             let found = AppCatalog.installedApps()
             await self.didLoad(found)
-            var batch: [String: Int64] = [:]
-            for (offset, app) in found.enumerated() {
-                batch[app.path] = FS.allocatedSize(app.path)
-                if batch.count == 8 || offset == found.count - 1 {
-                    let sizes = batch
-                    batch = [:]
-                    await self.didMeasureApps(sizes)
+            // Bundles first (fast), then each app's full footprint: bundle plus the data it owns.
+            for measure in [{ FS.allocatedSize($0.path) }, { Self.footprint($0, among: found) }] as [@Sendable (InstalledApp) -> Int64] {
+                var batch: [String: Int64] = [:]
+                for (offset, app) in found.enumerated() {
+                    batch[app.path] = measure(app)
+                    if batch.count == 8 || offset == found.count - 1 {
+                        let sizes = batch
+                        batch = [:]
+                        await self.didMeasureApps(sizes)
+                    }
                 }
             }
         }
+    }
+
+    /// Bundle plus every leftover matched by identifier (name-only matches might be another app's).
+    nonisolated static func footprint(_ app: InstalledApp, among apps: [InstalledApp]) -> Int64 {
+        LeftoverFinder(app: app, otherApps: apps).find()
+            .filter { $0.confidence == .exact }
+            .reduce(0) { $0 + FS.allocatedSize($1.path) }
     }
 
     private func didLoad(_ found: [InstalledApp]) {
@@ -119,8 +131,8 @@ final class UninstallerModel: RemovalHost {
             apps.append(app)
             apps.sort { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
             Task.detached(priority: .utility) {
-                let size = FS.allocatedSize(app.path)
-                await self.didMeasureApps([app.path: size])
+                await self.didMeasureApps([app.path: FS.allocatedSize(app.path)])
+                await self.didMeasureApps([app.path: Self.footprint(app, among: await self.apps)])
             }
         }
         selectedAppID = app.id
@@ -145,22 +157,29 @@ final class UninstallerModel: RemovalHost {
         inspected = app
         leftovers = []
         leftoverSizes = [:]
+        mentions = []
         checked = []
         isSearching = true
         refreshRunningState()
+        let otherApps = apps
         Task.detached(priority: .userInitiated) {
-            let found = LeftoverFinder(app: app).find()
-            await self.didFind(found, token: token)
+            let finder = LeftoverFinder(app: app, otherApps: otherApps)
+            let found = finder.find()
+            await self.didFind(found, mentions: finder.mentions, token: token)
+            var footprint: Int64 = 0
             for item in found {
                 let size = FS.allocatedSize(item.path)
+                if item.confidence == .exact { footprint += size }
                 await self.didMeasure(item.path, size: size, token: token)
             }
+            await self.didMeasureApps([app.path: footprint])
         }
     }
 
-    private func didFind(_ found: [Leftover], token: UUID) {
+    private func didFind(_ found: [Leftover], mentions: [String], token: UUID) {
         guard token == inspection else { return }
         leftovers = found
+        self.mentions = mentions
         // Name-only matches might belong to something else, so they start unticked.
         checked = Set(found.filter { $0.confidence == .exact }.map(\.path))
         isSearching = false
@@ -176,6 +195,7 @@ final class UninstallerModel: RemovalHost {
         inspected = nil
         leftovers = []
         leftoverSizes = [:]
+        mentions = []
         checked = []
         isSearching = false
         isAppRunning = false
@@ -214,7 +234,15 @@ final class UninstallerModel: RemovalHost {
         guard removal == nil else { return }
         let items = leftovers
             .filter { checked.contains($0.path) }
-            .map { RemovalItem(path: $0.path, size: leftoverSizes[$0.path] ?? 0) }
+            .map { item -> RemovalItem in
+                var removal = RemovalItem(path: item.path, size: leftoverSizes[item.path] ?? 0)
+                // A live mount (e.g. a VM's files shared into ~) must never be trashed: that acts on what's
+                // inside it. Once the app quits, the mount goes and the empty folder can go.
+                if FS.isMountPoint(item.path) {
+                    removal.refusal = "It's a mounted volume. Quit \(inspected?.name ?? "the app"), then try again."
+                }
+                return removal
+            }
         guard !items.isEmpty else { return }
         removal = RemovalProgress(mode: mode, total: items.count)
         RemovalRunner.run(items, mode: mode,

@@ -41,6 +41,13 @@ enum FS {
         return withUnsafeBytes(of: entry.pointee.d_name) { String(decoding: $0.prefix(length), as: UTF8.self) }
     }
 
+    /// A directory on a different device from its parent: something is mounted on it right now.
+    static func isMountPoint(_ path: String) -> Bool {
+        guard let st = info(path), st.st_mode & S_IFMT == S_IFDIR,
+              let parent = info((path as NSString).deletingLastPathComponent) else { return false }
+        return st.st_dev != parent.st_dev
+    }
+
     static func listNames(_ dir: String) -> [String] {
         guard let handle = opendir(dir) else { return [] }
         defer { closedir(handle) }

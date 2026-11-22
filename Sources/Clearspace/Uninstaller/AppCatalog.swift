@@ -1,5 +1,6 @@
 import CoreServices
 import Foundation
+import Security
 
 struct InstalledApp: Identifiable, Hashable {
     let path: String
@@ -7,6 +8,10 @@ struct InstalledApp: Identifiable, Hashable {
     let name: String
     let bundleID: String?
     let version: String?
+    /// App groups from the code signature; each owns ~/Library/Group Containers/<group>.
+    var appGroups: [String] = []
+    /// Labels of privileged helpers the app installs (Info.plist SMPrivilegedExecutables).
+    var helperLabels: [String] = []
 
     var id: String { path }
 }
@@ -40,7 +45,21 @@ enum AppCatalog {
         let bundleID = (info?["CFBundleIdentifier"] as? String) ?? spotlightBundleID(path)
         return InstalledApp(path: path, name: name,
                             bundleID: nonEmpty(bundleID),
-                            version: nonEmpty(info?["CFBundleShortVersionString"] as? String))
+                            version: nonEmpty(info?["CFBundleShortVersionString"] as? String),
+                            appGroups: appGroups(path),
+                            helperLabels: ((info?["SMPrivilegedExecutables"] as? [String: Any])?.keys).map { Array($0) } ?? [])
+    }
+
+    /// Reads com.apple.security.application-groups from the bundle's code signature.
+    static func appGroups(_ path: String) -> [String] {
+        var code: SecStaticCode?
+        guard SecStaticCodeCreateWithPath(URL(fileURLWithPath: path) as CFURL, [], &code) == errSecSuccess,
+              let code else { return [] }
+        var info: CFDictionary?
+        guard SecCodeCopySigningInformation(code, SecCSFlags(rawValue: kSecCSSigningInformation), &info) == errSecSuccess,
+              let entitlements = (info as? [String: Any])?[kSecCodeInfoEntitlementsDict as String] as? [String: Any]
+        else { return [] }
+        return entitlements["com.apple.security.application-groups"] as? [String] ?? []
     }
 
     private static func nonEmpty(_ text: String?) -> String? {
