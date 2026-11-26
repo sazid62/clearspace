@@ -130,12 +130,13 @@ export function Hero({ icon: Icon, tint }: { icon: LucideIcon; tint?: string }) 
   );
 }
 
-/** Native right-click menu for a file: reveal it, copy its path. */
-export async function showFileMenu(path: string) {
+/** Native right-click menu for a file: reveal it, copy its path, plus what the list adds. */
+export async function showFileMenu(path: string, more: { text: string; action: () => void }[] = []) {
   const menu = await Menu.new({
     items: [
       await MenuItem.new({ text: words().reveal, action: () => void revealItemInDir(path) }),
       await MenuItem.new({ text: "Copy Path", action: () => void writeText(path) }),
+      ...(await Promise.all(more.map((item) => MenuItem.new(item)))),
     ],
   });
   await menu.popup();

@@ -1,13 +1,15 @@
 import { useState, useSyncExternalStore, type ReactNode } from "react";
-import { Box, ChevronRight, CircleDashed, CheckCircle2, Clock, Database, Folder, GitBranch, Home, LayoutGrid, Layers, RotateCw, Search, ShieldAlert, Sparkles, Trash2, XCircle, type LucideIcon } from "lucide-react";
+import { open as openDialog } from "@tauri-apps/plugin-dialog";
+import { Box, ChevronRight, CircleDashed, CheckCircle2, Clock, Database, Folder, GitBranch, Home, LayoutGrid, Layers, Lock, RotateCw, Search, ShieldAlert, Sparkles, Trash2, X, XCircle, type LucideIcon } from "lucide-react";
 import { abbreviate, api, bytes, isDocker, nameOf, parentOf, plural, relative, words, type Storage } from "./api";
 import { worktreeParts, worktreeSize, type CleanerModel, type TreeRow, type WorktreeGroup } from "./cleanerModel";
-import { Checkbox, ConfirmDialog, FileIcon, Hero, LazyList, Pill, RemovalPanel, SearchField, Segmented, SizeColumn, Spinner, UsageBar, showFileMenu } from "./ui";
+import { Checkbox, ConfirmDialog, FileIcon, Hero, LazyList, Modal, Pill, RemovalPanel, SearchField, Segmented, SizeColumn, Spinner, UsageBar, showFileMenu } from "./ui";
 import type { Mode } from "./api";
 import { isMac, os } from "../platform";
 
 export function DiskCleaner({ model, storage }: { model: CleanerModel; storage?: Storage }) {
   const s = useSyncExternalStore(model.subscribe, model.getSnapshot);
+  const [showProtected, setShowProtected] = useState(false);
   const subtitle =
     s.phase === "idle"
       ? "Find what's using your disk"
@@ -23,20 +25,65 @@ export function DiskCleaner({ model, storage }: { model: CleanerModel; storage?:
           <div className="detail-title">Disk Cleaner</div>
           <div className="detail-subtitle">{subtitle}</div>
         </div>
-        {s.phase === "ready" && (
-          <div className="toolbar">
-            <SearchField value={s.query} onChange={model.setQuery} placeholder="Filter by name or path" />
+        <div className="toolbar">
+          {s.phase === "ready" && <SearchField value={s.query} onChange={model.setQuery} placeholder="Filter by name or path" />}
+          <button className="icon-button" title={`Never clean: ${plural(s.protected.length, "item")}`} onClick={() => setShowProtected(true)}>
+            <Lock size={15} />
+          </button>
+          {s.phase === "ready" && (
             <button className="icon-button" title="Scan again" disabled={!!s.removal} onClick={() => model.startScan()}>
               <RotateCw size={15} />
             </button>
-          </div>
-        )}
+          )}
+        </div>
       </header>
       {s.phase === "idle" && <Welcome model={model} storage={storage} />}
       {s.phase === "scanning" && <Scanning files={s.scannedFiles} folder={s.scanningPath} onCancel={() => model.cancelScan()} />}
       {s.phase === "ready" && <Results model={model} storage={storage} />}
       <RemovalPanel removal={s.removal} host={model} />
+      <ProtectedDialog model={model} open={showProtected} onClose={() => setShowProtected(false)} />
     </div>
+  );
+}
+
+/** The never-clean list: what's on it, and adding to it by hand. */
+function ProtectedDialog({ model, open, onClose }: { model: CleanerModel; open: boolean; onClose: () => void }) {
+  const s = useSyncExternalStore(model.subscribe, model.getSnapshot);
+  const add = async (directory: boolean) => {
+    const picked = await openDialog({ directory, multiple: false, title: directory ? "Choose a folder to never clean" : "Choose a file to never clean" }).catch(() => null);
+    if (typeof picked === "string") await model.protect(picked);
+  };
+  return (
+    <Modal open={open} onClose={onClose} width={520}>
+      <h2>Never clean</h2>
+      <p className="help">Clearspace won't suggest or remove these, or anything inside them, from the Disk Cleaner or the App Uninstaller. Right-click any row and choose Never Clean This to add it.</p>
+      <div className="protected-list">
+        {s.protected.length === 0 && <div className="muted">Nothing yet.</div>}
+        {s.protected.map((path) => (
+          <div key={path} className="protected-row">
+            <FileIcon path={path} size={20} dir={!/\.[a-z0-9]{1,5}$/i.test(path)} />
+            <span className="ellipsis" title={path}>
+              {abbreviate(path)}
+            </span>
+            <button className="icon-button" title="Allow cleaning again" onClick={() => void model.unprotect(path)}>
+              <X size={13} />
+            </button>
+          </div>
+        ))}
+      </div>
+      <div className="dialog-buttons">
+        <button className="plain-button" onClick={() => void add(true)}>
+          Add Folder…
+        </button>
+        <button className="plain-button" onClick={() => void add(false)}>
+          Add File…
+        </button>
+        <div className="spacer" />
+        <button className="primary-button" onClick={onClose}>
+          Done
+        </button>
+      </div>
+    </Modal>
   );
 }
 
@@ -187,7 +234,7 @@ function Suggestions({ model }: { model: CleanerModel }) {
   return (
     <>
       <Hint action={safe > 0 && <button className="pill-button" onClick={() => model.selectAllSafe()}>Select All Safe ({bytes(safe)})</button>}>
-        Caches, project build folders, git worktrees, temp leftovers, videos and downloads. <b>Safe</b> items come back on their own; check the rest before removing. Quit browsers before removing their caches.
+        Caches and logs, what removed apps left behind, project build folders, git worktrees, temp leftovers, videos and downloads. <b>Safe</b> items come back on their own; check the rest before removing. Quit an app before removing its cache.
       </Hint>
       <div className="clean-list">
         <LazyList
@@ -419,17 +466,25 @@ function CleanerRow({
   const s = useSyncExternalStore(model.subscribe, model.getSnapshot);
   const covered = model.isCovered(path);
   const selected = covered || s.selection.has(path);
+  // On the never-clean list, inside something on it, or holding something on it.
+  const locked = model.isProtected(path);
+  const listed = s.protected.includes(path);
   return (
     <div
       className={"clean-row" + (selected ? " selected" : "") + (note ? " tall" : "")}
-      onClick={() => !covered && model.setSelected(path, size, !selected)}
+      onClick={() => !covered && !locked && model.setSelected(path, size, !selected)}
       onDoubleClick={() => disclosure && disclosure !== "leaf" && model.toggleExpanded(path)}
       onContextMenu={(e) => {
         e.preventDefault();
-        void showFileMenu(path);
+        void showFileMenu(path, [listed ? { text: "Allow Cleaning Again", action: () => void model.unprotect(path) } : { text: "Never Clean This", action: () => void model.protect(path) }]);
       }}
     >
-      <Checkbox checked={selected} disabled={covered} title={covered ? "Included because its folder is selected" : "Select to remove"} onChange={(on) => model.setSelected(path, size, on)} />
+      <Checkbox
+        checked={selected}
+        disabled={covered || locked}
+        title={locked ? "On your never-clean list, or holds something that is" : covered ? "Included because its folder is selected" : "Select to remove"}
+        onChange={(on) => model.setSelected(path, size, on)}
+      />
       {disclosure && (
         <span style={{ paddingLeft: depth * 18 }} className="disclosure-wrap">
           {disclosure === "leaf" ? (
@@ -453,6 +508,7 @@ function CleanerRow({
         <div className="clean-title">
           <span className="ellipsis">{title}</span>
           {safety && <Pill text={safety === "safe" ? "Safe" : "Review"} tone={safety === "safe" ? "green" : "orange"} />}
+          {locked && <Pill text="Never clean" tone="gray" title={listed ? "You marked it as never to clean." : "It holds, or is inside, something you marked as never to clean."} />}
         </div>
         {subtitle && <div className="clean-subtitle ellipsis">{subtitle}</div>}
         {note && <div className="clean-note">{note}</div>}

@@ -1,5 +1,6 @@
 //! Known caches and leftovers for each platform, plus items found by what they are: project build
-//! folders, git worktrees, leftovers in /tmp, videos and big downloads.
+//! folders, git worktrees, leftovers in /tmp, videos and big downloads, any app's caches and logs,
+//! and what removed apps left behind.
 
 use super::fsx::{self, SEP};
 use super::scan::{ScanResult, GIT_FILE, MINIMUM};
@@ -68,6 +69,7 @@ fn entries() -> Vec<Entry> {
             e(h("Library/Caches/CocoaPods"), "CocoaPods cache", Safe, "Re-downloaded on the next pod install."),
             e(h("Library/Developer/Xcode/DerivedData"), "Xcode build products", Safe, "Rebuilt the next time you build in Xcode."),
             e(h("Library/Developer/CoreSimulator/Caches"), "Simulator caches", Safe, "Recreated by the iOS Simulator."),
+            e(h("Library/Containers/com.apple.Safari/Data/Library/Caches"), "Safari cache", Safe, "Quit Safari first."),
             e(h(".Trash"), "Trash contents", Safe, "Things you already deleted. (Empties the Trash.)"),
             e(h("Library/pnpm/store"), "pnpm package store", Review, "Projects re-download packages on the next pnpm install. Files still used by node_modules stay on disk until those projects are reinstalled."),
             e(h("Library/Application Support/com.apple.wallpaper/aerials/videos"), "Aerial wallpaper videos", Review, "Downloaded screen-saver videos; macOS re-downloads the one you use."),
@@ -129,8 +131,160 @@ fn entries() -> Vec<Entry> {
     out
 }
 
+/// Which apps are installed, for telling a living app's cache from what a removed app left.
+pub struct Installed {
+    /// Lower-cased identifier (com.vendor.App) → the app's name.
+    pub apps: HashMap<String, String>,
+    /// Asks the system whether an app with this identifier exists anywhere at all.
+    pub exists_elsewhere: fn(&str) -> bool,
+}
+
+#[derive(Debug, PartialEq)]
+pub enum Owner {
+    /// An installed app, by name.
+    App(String),
+    /// No app with this identifier is left on the machine.
+    Gone,
+    /// Can't be told: part of the system, or from a vendor with other apps installed.
+    Unknown,
+}
+
+impl Installed {
+    pub fn current() -> Self {
+        #[cfg(target_os = "macos")]
+        return Installed { apps: super::apps::mac::installed().into_iter().map(|(id, name)| (id.to_lowercase(), name)).collect(), exists_elsewhere: spotlight_knows };
+        #[cfg(not(target_os = "macos"))]
+        return Installed { apps: HashMap::new(), exists_elsewhere: |_| true };
+    }
+
+    /// Whose folder `com.vendor.App…` is. Helpers carry their app's identifier as a prefix
+    /// (com.vendor.App.helper), and a vendor's shared folders can serve any of its apps.
+    pub fn owner(&self, id: &str) -> Owner {
+        let id = id.to_lowercase();
+        let related = |a: &str, b: &str| a == b || a.strip_prefix(b).is_some_and(|rest| rest.starts_with('.'));
+        if let Some((_, name)) = self.apps.iter().find(|(app, _)| related(&id, app) || related(app, &id)) {
+            return Owner::App(name.clone());
+        }
+        let vendor = |text: &str| text.split('.').take(2).collect::<Vec<_>>().join(".");
+        if id.starts_with("com.apple.") || self.apps.keys().any(|app| vendor(app) == vendor(&id)) || (self.exists_elsewhere)(&id) {
+            return Owner::Unknown;
+        }
+        Owner::Gone
+    }
+}
+
+/// Spotlight indexes every app bundle by identifier, wherever it is kept. When Spotlight is
+/// off it knows nothing, so every app is taken to exist.
+#[cfg(target_os = "macos")]
+fn spotlight_knows(id: &str) -> bool {
+    use std::sync::OnceLock;
+    let finds = |id: &str| {
+        let query = format!("kMDItemCFBundleIdentifier == '{id}'c");
+        std::process::Command::new("/usr/bin/mdfind").arg(query).output().is_ok_and(|o| !o.stdout.iter().all(u8::is_ascii_whitespace))
+    };
+    static WORKING: OnceLock<bool> = OnceLock::new();
+    !*WORKING.get_or_init(|| finds("com.apple.finder")) || finds(id)
+}
+
+/// `com.vendor.App`: at least three parts, the first a short lower-case word.
+fn is_identifier(name: &str) -> bool {
+    let parts: Vec<&str> = name.split('.').collect();
+    let plain = |p: &str| !p.is_empty() && p.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_');
+    parts.len() >= 3 && parts.iter().all(|p| plain(p)) && (2..=6).contains(&parts[0].len()) && parts[0].chars().all(|c| c.is_ascii_lowercase())
+}
+
+/// Folders that Chromium, Electron and similar apps fill again on their own.
+const CACHE_FOLDERS: [&str; 13] = ["Cache", "Code Cache", "GPUCache", "CachedData", "CachedExtensionVSIXs", "CacheStorage", "ScriptCache", "DawnCache", "DawnGraphiteCache", "DawnWebGPUCache", "GrShaderCache", "ShaderCache", "Crashpad"];
+
+/// Caches and logs of any app, and what removed apps left, found by where they sit.
+fn app_data(result: &ScanResult, installed: &Installed) -> Vec<Suggestion> {
+    use Safety::{Review, Safe};
+    let home = fsx::home();
+    let h = |rel: &str| fsx::join(&home, rel);
+    // Where apps keep their own folders: Chromium-style caches sit a few levels inside these.
+    #[cfg(target_os = "macos")]
+    let app_folders = vec![h("Library/Application Support")];
+    #[cfg(target_os = "linux")]
+    let app_folders = vec![std::env::var("XDG_CONFIG_HOME").ok().filter(|d| !d.is_empty()).unwrap_or_else(|| h(".config"))];
+    #[cfg(windows)]
+    let app_folders = vec![super::temp::env_dir("APPDATA", "AppData/Roaming"), super::temp::env_dir("LOCALAPPDATA", "AppData/Local")];
+    let mut out = vec![];
+    for item in result.items.values() {
+        if !item.dir || item.size < MINIMUM {
+            continue;
+        }
+        let (path, name) = (item.path.as_str(), item.name.as_str());
+        let make = |title: String, safety, note: String| Suggestion { path: path.into(), title, note, safety, size: item.size };
+        if CACHE_FOLDERS.contains(&name) {
+            if let Some(base) = app_folders.iter().find(|base| fsx::inside(path, base)) {
+                let parts: Vec<&str> = path[base.trim_end_matches(SEP).len() + 1..].split(SEP).collect();
+                let above = &parts[..parts.len() - 1];
+                if (1..=4).contains(&above.len()) && !above.iter().any(|p| CACHE_FOLDERS.contains(p)) {
+                    let app = above[0];
+                    out.push(if name == "CacheStorage" {
+                        // Web pages' own offline copies: they come back, but only once you're online.
+                        make(format!("App cache · {app} ({name})"), Review, format!("Copies web pages inside {app} saved to work offline. They download again when needed. Quit {app} first."))
+                    } else {
+                        make(format!("App cache · {app} ({name})"), Safe, format!("Filled again by the app as you use it. Quit {app} first."))
+                    });
+                    continue;
+                }
+            }
+        }
+        let parent = fsx::parent(path);
+        let _ = (&parent, installed, Review);
+        #[cfg(target_os = "macos")]
+        {
+            let library = h("Library");
+            if !fsx::inside(&parent, &library) {
+                continue;
+            }
+            match &parent[library.len() + 1..] {
+                "Caches" if name.to_lowercase().starts_with("com.apple.") => {}
+                "Caches" if is_identifier(name) => out.push(match installed.owner(name) {
+                    Owner::App(app) => make(format!("App cache · {app}"), Safe, format!("Rebuilt by {app} when it needs it. Quit {app} first.")),
+                    Owner::Gone => make(format!("Cache of a removed app · {name}"), Safe, "No installed app uses this identifier. A cache is rebuilt if its app comes back.".into()),
+                    Owner::Unknown => make(format!("App cache · {name}"), Safe, "Rebuilt by its app when needed. Quit the app first.".into()),
+                }),
+                "Caches" => out.push(make(format!("Cache · {name}"), Safe, "Rebuilt when needed by whatever made it.".into())),
+                "Logs" if name == "DiagnosticReports" => out.push(make("Crash reports".into(), Safe, "Saved when apps crashed; only useful for tracking down the crash.".into())),
+                "Logs" => out.push(make(format!("Logs · {name}"), Safe, "Old log files, only useful when tracking down a problem.".into())),
+                // Only sandboxed apps own a container, and only apps save window state, so those are
+                // surely an app's. Application Support is shared with tools and frameworks.
+                "Containers" | "Saved Application State" | "Application Support" => {
+                    let id = name.strip_suffix(".savedState").unwrap_or(name);
+                    if is_identifier(id) && installed.owner(id) == Owner::Gone {
+                        let note = if parent.ends_with("Application Support") {
+                            "No installed app uses this identifier, so it's most likely what a removed app kept: its data and settings. Check before deleting; a command-line tool can use a name like this too."
+                        } else {
+                            "No installed app uses this identifier anymore. This is the data and settings the app kept; delete it if you won't install the app again."
+                        };
+                        out.push(make(format!("Left by a removed app · {id}"), Review, note.into()));
+                    }
+                }
+                _ => {}
+            }
+        }
+        #[cfg(target_os = "linux")]
+        {
+            let cache = std::env::var("XDG_CACHE_HOME").ok().filter(|d| !d.is_empty()).unwrap_or_else(|| h(".cache"));
+            if parent == cache {
+                out.push(make(format!("Cache · {name}"), Safe, "Rebuilt when needed by whatever made it.".into()));
+            } else if parent == h(".var/app") {
+                let kept = [format!("/var/lib/flatpak/app/{name}"), h(&format!(".local/share/flatpak/app/{name}"))].iter().any(|p| fsx::exists(p));
+                if !kept {
+                    out.push(make(format!("Left by a removed Flatpak app · {name}"), Review, "This Flatpak app is no longer installed. This is the data and settings it kept; delete it if you won't install the app again.".into()));
+                }
+            } else if parent == h("snap") && fsx::is_dir("/snap") && !fsx::exists(&format!("/snap/{name}")) {
+                out.push(make(format!("Left by a removed snap · {name}"), Review, "This snap is no longer installed. This is the data and settings it kept; delete it if you won't install it again.".into()));
+            }
+        }
+    }
+    out
+}
+
 /// Known caches plus what the scan itself turned up.
-pub fn suggestions(result: &ScanResult) -> Vec<Suggestion> {
+pub fn suggestions(result: &ScanResult, installed: &Installed) -> Vec<Suggestion> {
     let mut found: HashMap<String, Suggestion> = HashMap::new();
     let mut add = |s: Suggestion| {
         found.entry(fsx::key(&s.path)).or_insert(s);
@@ -143,6 +297,7 @@ pub fn suggestions(result: &ScanResult) -> Vec<Suggestion> {
     let detector = Detector::new(result);
     detector.folders().into_iter().for_each(&mut add);
     detector.files().into_iter().for_each(&mut add);
+    app_data(result, installed).into_iter().for_each(&mut add);
     let mut out: Vec<Suggestion> = found.into_values().collect();
     out.sort_by(|a, b| b.size.cmp(&a.size));
     out
@@ -341,5 +496,121 @@ impl<'a> Detector<'a> {
 
     fn age(&self, path: &str) -> String {
         fsx::info(path).map(|m| fsx::relative(fsx::modified_secs(&m), self.now)).unwrap_or_else(|| "a while ago".into())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::clean::scan::{Item, Node};
+
+    fn scanned(folders: &[&str]) -> ScanResult {
+        let home = fsx::home();
+        let items = folders
+            .iter()
+            .map(|rel| {
+                let path = fsx::join(&home, rel);
+                (fsx::key(&path), Item { name: fsx::name(&path), path, dir: true, size: MINIMUM * 2 })
+            })
+            .collect();
+        ScanResult { root: Node { path: String::new(), name: String::new(), dir: true, size: 0, small: 0, children: vec![] }, large_files: vec![], items, markers: HashMap::new(), file_count: 0, millis: 0 }
+    }
+
+    /// Dev aid: `cargo test real_app_data -- --ignored --nocapture` lists what the new rules find
+    /// in this account's app folders. Looks only.
+    #[test]
+    #[ignore]
+    fn real_app_data() {
+        use std::sync::atomic::AtomicBool;
+        let home = fsx::home();
+        let folder = if cfg!(target_os = "macos") { "Library" } else if cfg!(windows) { "AppData" } else { ".cache" };
+        let cancel = AtomicBool::new(false);
+        let mut progress = |_: u64, _: &str| {};
+        let roots = [crate::clean::scan::ScanRoot { path: fsx::join(&home, folder), title: folder.into() }];
+        let result = crate::clean::scan::Scanner::new(&cancel, &mut progress).run(&roots).unwrap();
+        let mut found = app_data(&result, &Installed::current());
+        found.sort_by(|a, b| b.size.cmp(&a.size));
+        for s in &found {
+            println!("{:>9} MB  {:?}  {}  ({})", s.size >> 20, s.safety, s.title, s.path);
+        }
+    }
+
+    fn installed(apps: &[(&str, &str)]) -> Installed {
+        Installed { apps: apps.iter().map(|(id, name)| (id.to_string(), name.to_string())).collect(), exists_elsewhere: |id| id == "org.elsewhere.app" }
+    }
+
+    #[test]
+    fn tells_whose_folder_an_identifier_is() {
+        let known = installed(&[("com.tinyspeck.slackmacgap", "Slack"), ("com.google.chrome", "Google Chrome")]);
+        assert_eq!(known.owner("com.tinyspeck.slackmacgap"), Owner::App("Slack".into()));
+        assert_eq!(known.owner("com.tinyspeck.slackmacgap.helper"), Owner::App("Slack".into()));
+        // Another app of an installed vendor, part of the system, or an app kept somewhere unusual.
+        assert_eq!(known.owner("com.google.Keystone"), Owner::Unknown);
+        assert_eq!(known.owner("com.apple.Safari"), Owner::Unknown);
+        assert_eq!(known.owner("org.elsewhere.app"), Owner::Unknown);
+        assert_eq!(known.owner("com.gone.Editor"), Owner::Gone);
+    }
+
+    #[test]
+    fn knows_an_identifier_from_a_plain_name() {
+        assert!(is_identifier("com.gone.Editor") && is_identifier("org.videolan.vlc"));
+        assert!(!is_identifier("Slack") && !is_identifier("com.vendor") && !is_identifier("My.Folder.Name") && !is_identifier("node..cache"));
+    }
+
+    #[test]
+    fn finds_chromium_style_caches_inside_app_folders() {
+        #[cfg(target_os = "macos")]
+        let base = "Library/Application Support";
+        #[cfg(target_os = "linux")]
+        let base = ".config";
+        #[cfg(windows)]
+        let base = "AppData/Roaming";
+        if cfg!(not(target_os = "macos")) && ["XDG_CONFIG_HOME", "APPDATA"].iter().any(|v| std::env::var_os(v).is_some_and(|d| fsx::key(&d.to_string_lossy()) != fsx::key(&fsx::join(&fsx::home(), base)))) {
+            return; // app folders are somewhere else on this machine
+        }
+        let result = scanned(&[
+            &format!("{base}/Slack/Cache"),
+            &format!("{base}/Vendor/Editor/User Data/Code Cache"),
+            &format!("{base}/Slack/Cache/Cache"),
+            &format!("{base}/Slack/Storage"),
+            &format!("{base}/Code/WebStorage/5/CacheStorage"),
+        ]);
+        let mut titles: Vec<String> = app_data(&result, &installed(&[])).into_iter().map(|s| format!("{}/{:?}", s.title, s.safety)).collect();
+        titles.sort();
+        assert_eq!(titles, ["App cache · Code (CacheStorage)/Review", "App cache · Slack (Cache)/Safe", "App cache · Vendor (Code Cache)/Safe"]);
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn sorts_library_folders_into_caches_logs_and_leftovers() {
+        let result = scanned(&[
+            "Library/Caches/com.tinyspeck.slackmacgap",
+            "Library/Caches/com.gone.Editor",
+            "Library/Caches/com.apple.Safari",
+            "Library/Caches/node-gyp",
+            "Library/Logs/DiagnosticReports",
+            "Library/Logs/Editor",
+            "Library/Containers/com.gone.Editor",
+            "Library/Containers/com.tinyspeck.slackmacgap",
+            "Library/Application Support/Editor",
+            "Library/Saved Application State/com.gone.Editor.savedState",
+            "Library/Mail/com.gone.Editor",
+            "Library/WebKit/org.webkit.Playwright",
+            "Library/HTTPStorages/com.gone.Editor",
+        ]);
+        let mut found: Vec<String> = app_data(&result, &installed(&[("com.tinyspeck.slackmacgap", "Slack")])).into_iter().map(|s| format!("{} [{:?}]", s.title, s.safety)).collect();
+        found.sort();
+        assert_eq!(
+            found,
+            [
+                "App cache · Slack [Safe]",
+                "Cache of a removed app · com.gone.Editor [Safe]",
+                "Cache · node-gyp [Safe]",
+                "Crash reports [Safe]",
+                "Left by a removed app · com.gone.Editor [Review]",
+                "Left by a removed app · com.gone.Editor [Review]",
+                "Logs · Editor [Safe]",
+            ]
+        );
     }
 }

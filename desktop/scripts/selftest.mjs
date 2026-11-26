@@ -121,6 +121,13 @@ const checks = {
     ...(process.platform === "win32" ? [/^inspected Selftest Fixture \d+: true$/m, /^leftovers: 1 \(appData\)/m] : []),
     /^uninstall confirm open: true$/m,
     /^nothing removed: true$/m,
+    /^never clean hides suggestion: true$/m,
+    /^never clean refused: You marked it as never to clean\.$/m,
+    /^never clean kept it on disk: true$/m,
+    /^never clean list after removing it: 0$/m,
+    /^maintenance tasks: [1-9]/m,
+    /^status: health \d+, cores [1-9]\d*, memory true, disk true, programs true, readings [2-9]/m,
+    /^history: [1-9]\d* entries?, newest: delete \.next by cleaner$/m,
   ],
   restore: [
     /^terminals shown: 1, it is the selected tab's: true$/m,

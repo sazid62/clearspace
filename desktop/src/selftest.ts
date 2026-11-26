@@ -5,8 +5,8 @@ import { getCurrentWindow } from "@tauri-apps/api/window";
 import { toPng } from "html-to-image";
 import { terminal } from "./App";
 import { os } from "./platform";
-import { cleaner, uninstaller } from "./CleanSpace";
-import { iconUrl } from "./clean/api";
+import { cleaner, history, maintenance, status, uninstaller } from "./CleanSpace";
+import { api, iconUrl } from "./clean/api";
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 const lines: string[] = [];
@@ -293,6 +293,21 @@ async function cleanScenario() {
   });
   log(`guard on scanned folder: ${refusal}`);
 
+  // Never clean: a marked folder leaves the suggestions and the removal refuses it.
+  const kept = cleaner.getSnapshot().suggestions.find((x) => x.title.startsWith("node_modules"))?.path ?? "";
+  await cleaner.protect(kept);
+  log(`never clean hides suggestion: ${!!kept && !cleaner.getSnapshot().suggestions.some((x) => x.path === kept)}`);
+  const protectedRefusal = await new Promise<string>((resolve) =>
+    void api.remove([{ path: kept, size: 0 }], "permanent", "cleaner", (e) => {
+      if (e.kind === "outcome") resolve(String(e.error));
+    }),
+  );
+  log(`never clean refused: ${protectedRefusal}`);
+  const stillThere = await invoke<boolean[]>("clean_exists", { paths: [kept] });
+  log(`never clean kept it on disk: ${stillThere[0]}`);
+  await cleaner.unprotect(kept);
+  log(`never clean list after removing it: ${cleaner.getSnapshot().protected.length}`);
+
   if (os === "macos") {
     const res = await fetch(iconUrl("/Applications", 32)).catch(() => undefined);
     log(`icon handler: ${res?.status} ${res?.headers.get("content-type")} ${(await res?.arrayBuffer())?.byteLength ?? 0} bytes`);
@@ -321,4 +336,26 @@ async function cleanScenario() {
     await sleep(400);
     log(`nothing removed: ${!uninstaller.getSnapshot().removal}`);
   }
+
+  // The other tools, looking only: nothing is run, slimmed or cleared.
+  click(".row", "Maintenance");
+  log(`maintenance loaded: ${await until(() => maintenance.getSnapshot().tasks.length > 0, 15000)}`);
+  const m = maintenance.getSnapshot();
+  log(`maintenance tasks: ${m.tasks.length} (${m.tasks.map((t) => t.id).join(",")}), slim supported: ${m.slimSupported}`);
+  await sleep(600);
+  await snap("c10-maintenance");
+
+  click(".row", "Status");
+  log(`status loaded: ${await until(() => !!status.getSnapshot().latest, 15000)}`);
+  await until(() => status.getSnapshot().cpu.length >= 2, 6000);
+  const v = status.getSnapshot().latest;
+  if (v) log(`status: health ${v.health.score}, cores ${v.cores}, memory ${v.memoryTotal > 0}, disk ${v.diskTotal > 0}, programs ${v.byCpu.length > 0}, readings ${status.getSnapshot().cpu.length}`);
+  await snap("c11-status");
+
+  click(".row", "History");
+  log(`history loaded: ${await until(() => history.getSnapshot().loaded, 10000)}`);
+  const h = history.getSnapshot().entries;
+  log(`history: ${h.length} entries, newest: ${h[0] ? `${h[0].action} ${h[0].title.split(/[\\/]/).pop()} by ${h[0].tool}` : "none"}`);
+  await sleep(400);
+  await snap("c12-history");
 }

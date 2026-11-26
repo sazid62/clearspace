@@ -1693,3 +1693,212 @@ button.disclosure:hover {
 .lazy-sentinel {
   height: 1px;
 }
+
+/* ---------- Never clean ---------- */
+
+.protected-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  max-height: 260px;
+  overflow-y: auto;
+  margin-bottom: 14px;
+  padding: 6px;
+  border-radius: 8px;
+  background: var(--hover);
+  font-size: 12px;
+}
+
+.protected-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 30px;
+  padding: 0 4px;
+}
+
+.protected-row > .ellipsis {
+  flex: 1;
+}
+
+.protected-row .icon-button {
+  width: 22px;
+  height: 22px;
+}
+
+/* ---------- Maintenance ---------- */
+
+.task-command {
+  overflow: hidden;
+  margin-top: 3px;
+  font: 10.5px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  color: var(--muted);
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  user-select: text;
+  -webkit-user-select: text;
+}
+
+.task-state {
+  display: flex;
+  justify-content: flex-end;
+  max-width: 220px;
+  flex: none;
+  padding-top: 4px;
+  font-size: 11px;
+}
+
+.task-state > span {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.task-ok {
+  color: var(--c-green);
+}
+
+.task-failed {
+  color: var(--c-red);
+}
+
+/* ---------- Status ---------- */
+
+.status-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(250px, 1fr));
+  gap: 12px;
+  padding: 16px 18px 20px;
+}
+
+.status-card {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 0;
+  padding: 14px 16px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--bar);
+}
+
+.status-head {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+}
+
+.status-title {
+  font-weight: 600;
+}
+
+.status-value {
+  margin-left: auto;
+  font-size: 17px;
+  font-weight: 650;
+}
+
+.status-fact {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  font-size: 12px;
+}
+
+.status-fact .muted {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+}
+
+.status-chart {
+  width: 100%;
+  height: 46px;
+  overflow: visible;
+}
+
+.status-chart polyline {
+  fill: none;
+  stroke: var(--accent);
+  stroke-width: 1.4;
+  vector-effect: non-scaling-stroke;
+}
+
+.status-chart polyline.second {
+  stroke: var(--c-orange);
+  opacity: 0.7;
+}
+
+.cores {
+  display: flex;
+  align-items: flex-end;
+  gap: 2px;
+  height: 22px;
+}
+
+.core {
+  display: flex;
+  align-items: flex-end;
+  flex: 1;
+  height: 100%;
+  overflow: hidden;
+  border-radius: 2px;
+  background: var(--selected);
+}
+
+.core > span {
+  width: 100%;
+  background: color-mix(in srgb, var(--accent) 75%, transparent);
+}
+
+.status-card.health {
+  grid-column: 1 / -1;
+  flex-direction: row;
+  align-items: center;
+  gap: 16px;
+}
+
+.health-score {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 30px;
+  font-weight: 700;
+}
+
+.health.good .health-score {
+  color: var(--c-green);
+}
+
+.health.fair .health-score {
+  color: var(--c-orange);
+}
+
+.health.poor .health-score {
+  color: var(--c-red);
+}
+
+.health-text {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  line-height: 1.4;
+}
+
+.status-card.programs {
+  gap: 6px;
+}
+
+/* ---------- History ---------- */
+
+.history-row {
+  min-height: 40px;
+}
+
+.usage-fill.battery {
+  background: var(--c-green);
+}
+
+.usage-fill.battery.low {
+  background: var(--c-red);
+}

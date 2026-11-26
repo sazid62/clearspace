@@ -15,7 +15,9 @@ pub struct Extra {
     pub helper_labels: Vec<String>,
 }
 
-pub fn list() -> Vec<App> {
+/// Every app the user can remove: /Applications and ~/Applications, without macOS's own apps
+/// and Clearspace itself.
+pub fn bundles() -> Vec<String> {
     let home = fsx::home();
     let mut bundles = vec![];
     for root in ["/Applications".to_string(), fsx::join(&home, "Applications")] {
@@ -23,11 +25,30 @@ pub fn list() -> Vec<App> {
     }
     let own = own_bundle();
     let mut seen = HashSet::new();
-    let paths: Vec<String> = bundles
-        .into_iter()
-        .map(|b| fsx::real_path(&b))
-        .filter(|p| !is_system(p) && Some(p) != own.as_ref() && seen.insert(p.clone()))
-        .collect();
+    bundles.into_iter().map(|b| fsx::real_path(&b)).filter(|p| !is_system(p) && Some(p) != own.as_ref() && seen.insert(p.clone())).collect()
+}
+
+/// Identifier and name of every installed app, macOS's own included. Reads only each
+/// Info.plist, so it is quick.
+pub fn installed() -> Vec<(String, String)> {
+    let home = fsx::home();
+    let mut bundles = vec![];
+    for root in ["/Applications".to_string(), fsx::join(&home, "Applications"), "/System/Applications".to_string()] {
+        collect(&root, 1, &mut bundles);
+    }
+    bundles
+        .iter()
+        .filter_map(|path| {
+            let info = ["Contents/Info.plist", "WrappedBundle/Info.plist"].iter().find_map(|rel| plist::Value::from_file(fsx::join(path, rel)).ok())?;
+            let id = info.as_dictionary()?.get("CFBundleIdentifier")?.as_string()?.trim().to_string();
+            let name = fsx::name(path);
+            (!id.is_empty()).then(|| (id, name.strip_suffix(".app").unwrap_or(&name).to_string()))
+        })
+        .collect()
+}
+
+pub fn list() -> Vec<App> {
+    let paths = bundles();
     // Reading code signatures takes ~30 ms an app, so read them side by side.
     let mut apps: Vec<App> = std::thread::scope(|scope| {
         let chunks: Vec<Vec<String>> = paths.chunks(paths.len().div_ceil(8).max(1)).map(|c| c.to_vec()).collect();
