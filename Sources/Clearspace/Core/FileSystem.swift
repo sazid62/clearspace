@@ -5,6 +5,8 @@ import Foundation
 enum FS {
     static let home = NSHomeDirectory()
     static let trash = home + "/.Trash"
+    /// The machine-wide temp folder (/tmp). Tools like Claude Code, git worktrees and test runs leave folders here.
+    static let sharedTemp = realPath("/tmp")
 
     /// The per-user temp root (parent of DARWIN_USER_TEMP_DIR), which holds T/, C/ and X/.
     static let userTempRoot: String = {
@@ -37,6 +39,13 @@ enum FS {
     static func entryName(_ entry: UnsafeMutablePointer<dirent>) -> String {
         let length = Int(entry.pointee.d_namlen)
         return withUnsafeBytes(of: entry.pointee.d_name) { String(decoding: $0.prefix(length), as: UTF8.self) }
+    }
+
+    /// A directory on a different device from its parent: something is mounted on it right now.
+    static func isMountPoint(_ path: String) -> Bool {
+        guard let st = info(path), st.st_mode & S_IFMT == S_IFDIR,
+              let parent = info((path as NSString).deletingLastPathComponent) else { return false }
+        return st.st_dev != parent.st_dev
     }
 
     static func listNames(_ dir: String) -> [String] {

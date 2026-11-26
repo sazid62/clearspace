@@ -54,7 +54,7 @@ ARCHS=arm64 scripts/build.sh  # one architecture, faster
 swift test                    # unit tests (Swift Testing)
 ```
 
-The build script compiles release binaries for each architecture and merges them with `lipo`. It renders the icon and DMG background with `scripts/artwork.swift`, signs ad-hoc, and packages the DMG. For the styled drag-to-Applications window it uses [dmgbuild](https://github.com/dmgbuild/dmgbuild), installed into `.build/` on first run. Without network access it falls back to a plain DMG.
+The build script compiles release binaries for each architecture and merges them with `lipo`. It builds the icon from `Support/AppIcon.png`, renders the DMG background with `scripts/artwork.swift`, signs ad-hoc, and packages the DMG. For the styled drag-to-Applications window it uses [dmgbuild](https://github.com/dmgbuild/dmgbuild), installed into `.build/` on first run. Without network access it falls back to a plain DMG.
 
 The version comes from `CFBundleShortVersionString` in `Support/Info.plist`.
 

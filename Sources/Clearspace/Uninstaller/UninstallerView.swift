@@ -283,6 +283,24 @@ private struct LeftoverList: View {
                     }
                 }
             }
+            if !model.mentions.isEmpty {
+                Section {
+                    Label("These files also hold your own settings, so Clearspace leaves them alone. Remove the lines that mention \(model.inspected?.name ?? "the app") yourself.",
+                          systemImage: "info.circle")
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+                    ForEach(model.mentions, id: \.self) { path in
+                        HStack(spacing: 10) {
+                            FileIcon(path: path, size: 22)
+                            Text(FS.abbreviate(path)).lineLimit(1).truncationMode(.middle)
+                        }
+                        .padding(.vertical, 2)
+                        .contextMenu { FileMenuItems(path: path) }
+                    }
+                } header: {
+                    Label("Edit by Hand", systemImage: "pencil.and.list.clipboard")
+                }
+            }
         }
         .listStyle(.inset)
     }

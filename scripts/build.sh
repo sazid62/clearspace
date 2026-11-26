@@ -39,9 +39,14 @@ cp Support/Info.plist "$APP/Contents/Info.plist"
 printf 'APPL????' > "$APP/Contents/PkgInfo"
 
 echo "==> Rendering icon"
-swiftc -O scripts/artwork.swift -o "$WORK/artwork"
-"$WORK/artwork" icon "$WORK/AppIcon.iconset"
-iconutil -c icns "$WORK/AppIcon.iconset" -o "$APP/Contents/Resources/AppIcon.icns"
+swiftc -O scripts/artwork.swift -o "$WORK/artwork"  # still draws the DMG background
+ICONSET="$WORK/AppIcon.iconset"
+mkdir -p "$ICONSET"
+for points in 16 32 128 256 512; do
+  sips -z "$points" "$points" Support/AppIcon.png --out "$ICONSET/icon_${points}x${points}.png" >/dev/null
+  sips -z $((points * 2)) $((points * 2)) Support/AppIcon.png --out "$ICONSET/icon_${points}x${points}@2x.png" >/dev/null
+done
+iconutil -c icns "$ICONSET" -o "$APP/Contents/Resources/AppIcon.icns"
 
 echo "==> Signing (ad-hoc)"
 codesign --force --sign - --timestamp=none "$APP"
