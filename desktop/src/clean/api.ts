@@ -18,6 +18,8 @@ export interface LargeFile {
   size: number;
   /** Seconds since 1970. */
   modified: number;
+  /** Seconds since 1970 when it was last opened or changed. */
+  used: number;
 }
 
 export type Safety = "safe" | "review";
@@ -128,6 +130,79 @@ export interface Inspection {
 
 export type InspectEvent = { kind: "found"; inspection: Inspection } | { kind: "size"; path: string; size: number } | { kind: "done" };
 
+/** One line of the history: something removed, an app slimmed, or a maintenance task run. */
+export interface HistoryEntry {
+  /** Seconds since 1970. */
+  at: number;
+  action: "trash" | "delete" | "slim" | "task";
+  /** The path, or the task's title. */
+  title: string;
+  size: number;
+  tool: "cleaner" | "uninstaller" | "maintenance";
+}
+
+export interface Program {
+  pid: number;
+  name: string;
+  /** Percent of one processor core. */
+  cpu: number;
+  memory: number;
+}
+
+export interface SystemStatus {
+  host: string;
+  system: string;
+  processor: string;
+  cores: number;
+  uptime: number;
+  /** Percent of all cores together. */
+  cpu: number;
+  perCore: number[];
+  load: [number, number, number] | null;
+  memoryUsed: number;
+  memoryTotal: number;
+  swapUsed: number;
+  swapTotal: number;
+  diskTotal: number;
+  diskAvailable: number;
+  /** Bytes a second. */
+  diskRead: number;
+  diskWrite: number;
+  netDown: number;
+  netUp: number;
+  battery: { percent: number; charging: boolean } | null;
+  byCpu: Program[];
+  byMemory: Program[];
+  health: { score: number; issues: string[] };
+}
+
+export interface MaintenanceTask {
+  id: string;
+  title: string;
+  detail: string;
+  /** The command it runs. */
+  command: string;
+  admin: boolean;
+  caution: string | null;
+}
+
+export type MaintenanceEvent = { kind: "start"; id: string } | { kind: "outcome"; id: string; ok: boolean; message: string } | { kind: "finished" };
+
+/** A universal app whose Intel half can go. `id` is its path. */
+export interface SlimApp {
+  id: string;
+  name: string;
+  intel: number;
+  files: number;
+}
+
+export type SlimEvent =
+  | { kind: "found"; app: SlimApp }
+  | { kind: "listed" }
+  | { kind: "start"; id: string }
+  | { kind: "outcome"; id: string; freed: number; error: string | null }
+  | { kind: "finished" };
+
 // ---------- Calls ----------
 
 export const api = {
@@ -143,7 +218,7 @@ export const api = {
     events.onmessage = onEvent;
     return invoke("clean_remove", { items, mode, checks, events });
   },
-  removeAsAdmin: (paths: string[], mode: Mode) => invoke<AdminResult>("clean_remove_admin", { paths, mode }),
+  removeAsAdmin: (items: { path: string; size: number }[], mode: Mode, checks: "cleaner" | "uninstaller") => invoke<AdminResult>("clean_remove_admin", { items, mode, checks }),
   exists: (paths: string[]) => invoke<boolean[]>("clean_exists", { paths }),
   worktrees: (worktrees: Worktree[], onEvent: (e: WorktreeEvent) => void) => {
     const events = new Channel<WorktreeEvent>();
@@ -166,6 +241,28 @@ export const api = {
   isRunning: (id: string) => invoke<boolean>("apps_running", { id }),
   quit: (id: string) => invoke("apps_quit", { id }),
   runUninstaller: (id: string) => invoke("apps_uninstall", { id }),
+  protected: () => invoke<string[]>("protected_list"),
+  setProtected: (paths: string[]) => invoke<string[]>("protected_set", { paths }),
+  history: () => invoke<HistoryEntry[]>("history_list"),
+  clearHistory: () => invoke("history_clear"),
+  status: () => invoke<SystemStatus>("status_sample"),
+  maintenanceTasks: () => invoke<MaintenanceTask[]>("maintain_tasks"),
+  runMaintenance: (ids: string[], onEvent: (e: MaintenanceEvent) => void) => {
+    const events = new Channel<MaintenanceEvent>();
+    events.onmessage = onEvent;
+    return invoke("maintain_run", { ids, events });
+  },
+  slimSupported: () => invoke<boolean>("slim_supported"),
+  slimList: (onEvent: (e: SlimEvent) => void) => {
+    const events = new Channel<SlimEvent>();
+    events.onmessage = onEvent;
+    return invoke("slim_list", { events });
+  },
+  slimRun: (ids: string[], onEvent: (e: SlimEvent) => void) => {
+    const events = new Channel<SlimEvent>();
+    events.onmessage = onEvent;
+    return invoke("slim_run", { ids, events });
+  },
 };
 
 // ---------- Formatting ----------
@@ -186,6 +283,9 @@ export function bytes(n: number): string {
 }
 
 export const plural = (n: number, noun: string) => `${n.toLocaleString()} ${noun}${n === 1 ? "" : "s"}`;
+
+/** "1.2 MB/s" for a number of bytes a second. */
+export const rate = (n: number) => (n < 1000 ? "0 KB/s" : `${bytes(n)}/s`);
 
 export const sep = () => (os === "windows" ? "\\" : "/");
 

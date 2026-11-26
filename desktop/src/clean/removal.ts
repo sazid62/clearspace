@@ -25,6 +25,7 @@ export interface Outcome {
 /** Live state of a removal job; drives the progress and summary panel. */
 export interface Removal {
   mode: Mode;
+  checks: "cleaner" | "uninstaller";
   total: number;
   current: string;
   outcomes: Outcome[];
@@ -56,7 +57,7 @@ export function runRemoval(
   onRemoved: (path: string) => void,
   onFinish: () => void,
 ) {
-  let removal: Removal = { mode, total: items.length, current: "", outcomes: [], running: true, elevating: false };
+  let removal: Removal = { mode, checks, total: items.length, current: "", outcomes: [], running: true, elevating: false };
   update(removal);
   void api.remove(items, mode, checks, (e) => {
     if (e.kind === "start") removal = { ...removal, current: e.path };
@@ -73,9 +74,10 @@ export function runRemoval(
 
 /** Retries the items that needed more rights behind the system's administrator prompt. */
 export async function retryAsAdmin(removal: Removal, update: (r: Removal) => void, onRemoved: (path: string) => void) {
-  const paths = failures(removal).filter((o) => o.needsAdmin).map((o) => o.path);
+  const items = failures(removal).filter((o) => o.needsAdmin).map((o) => ({ path: o.path, size: o.size }));
+  const paths = items.map((i) => i.path);
   update({ ...removal, elevating: true, adminError: undefined });
-  const result: AdminResult = await api.removeAsAdmin(paths, removal.mode).catch((e) => ({ kind: "failed" as const, message: String(e) }));
+  const result: AdminResult = await api.removeAsAdmin(items, removal.mode, removal.checks).catch((e) => ({ kind: "failed" as const, message: String(e) }));
   const stillThere = await api.exists(paths).catch(() => paths.map(() => true));
   const gone = new Set(paths.filter((_, i) => !stillThere[i]));
   const outcomes = removal.outcomes.map((o) => {

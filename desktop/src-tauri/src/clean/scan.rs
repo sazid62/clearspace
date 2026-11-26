@@ -33,6 +33,8 @@ pub struct LargeFile {
     pub size: u64,
     /// Seconds since 1970.
     pub modified: i64,
+    /// Seconds since 1970 when it was last opened or changed.
+    pub used: i64,
 }
 
 pub struct ScanRoot {
@@ -194,7 +196,7 @@ impl<'a> Scanner<'a> {
                 self.keep(&file);
                 node.children.push(file);
                 if meta.is_file() {
-                    self.large_files.push(LargeFile { path: child_path, size, modified: fsx::modified_secs(&meta) });
+                    self.large_files.push(LargeFile { path: child_path, size, modified: fsx::modified_secs(&meta), used: fsx::used_secs(&meta) });
                 }
             } else {
                 node.small += size;

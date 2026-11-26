@@ -90,6 +90,13 @@ pub fn modified_secs(meta: &Metadata) -> i64 {
         .unwrap_or(0)
 }
 
+/// When the file was last opened or changed, whichever is later. Some systems update the open
+/// time lazily or not at all; then this is the change time, so a file never looks older than it is.
+pub fn used_secs(meta: &Metadata) -> i64 {
+    let accessed = meta.accessed().ok().and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok()).map(|d| d.as_secs() as i64).unwrap_or(0);
+    accessed.max(modified_secs(meta))
+}
+
 /// Identifies a file across hard links (Unix); None where links aren't tracked.
 #[cfg(unix)]
 pub fn file_id(meta: &Metadata) -> Option<(u64, u64)> {

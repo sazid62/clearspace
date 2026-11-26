@@ -51,6 +51,8 @@ interface State {
   removal?: Removal;
   /** Bumped when the tree changes, so derived lists refresh. */
   revision: number;
+  /** Files and folders the user marked as never to clean. */
+  protected: string[];
 }
 
 /** Disk Cleaner: scan, three views of the result, selection, and removal. */
@@ -79,7 +81,12 @@ export class CleanerModel extends Store<State> implements RemovalHost {
       expanded: new Set(),
       selection: new Map(),
       revision: 0,
+      protected: [],
     });
+    void api
+      .protected()
+      .then((list) => this.set({ protected: list }))
+      .catch(() => {});
   }
 
   get busy() {
@@ -195,6 +202,7 @@ export class CleanerModel extends Store<State> implements RemovalHost {
   }
 
   setSelected(path: string, size: number, on: boolean) {
+    if (on && this.isProtected(path)) return;
     const selection = new Map(this.state.selection);
     if (on) {
       for (const key of [...selection.keys()]) if (isInside(key, path)) selection.delete(key);
@@ -206,6 +214,27 @@ export class CleanerModel extends Store<State> implements RemovalHost {
   }
 
   clearSelection = () => this.set({ selection: new Map() });
+
+  // ---------- Never clean ----------
+
+  /** True when `path` is on the never-clean list, inside something on it, or holds something on it. */
+  isProtected(path: string) {
+    return this.state.protected.some((p) => within(path, p) || isInside(p, path));
+  }
+
+  /** Marks a file or folder as never to clean: it leaves the suggestions and can't be ticked. */
+  async protect(path: string) {
+    if (isDocker(path) || this.state.protected.some((p) => within(path, p))) return;
+    const list = await api.setProtected([...this.state.protected.filter((p) => !isInside(p, path)), path]).catch(() => undefined);
+    if (!list) return;
+    const kept = (p: string) => !list.some((x) => within(p, x) || isInside(x, p));
+    this.set({ protected: list, suggestions: this.state.suggestions.filter((s) => kept(s.path)), selection: new Map([...this.state.selection].filter(([p]) => kept(p))) });
+  }
+
+  async unprotect(path: string) {
+    const list = await api.setProtected(this.state.protected.filter((p) => p !== path)).catch(() => undefined);
+    if (list) this.set({ protected: list });
+  }
 
   // ---------- Worktrees ----------
 

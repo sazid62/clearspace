@@ -1,13 +1,20 @@
-//! The Clean space: Disk Cleaner (scan, suggestions, removal) and App Uninstaller, on every platform.
-//! Heavy work runs on its own threads and streams results to the window over channels.
+//! The Clean space: Disk Cleaner (scan, suggestions, removal), App Uninstaller, Maintenance,
+//! Status and History, on every platform. Heavy work runs on its own threads and streams results
+//! to the window over channels.
 
 pub mod apps;
 pub mod fsx;
 pub mod guard;
 #[cfg(target_os = "macos")]
 pub mod mac;
+pub mod maintain;
 pub mod remove;
 pub mod scan;
+pub mod settings;
+pub mod slim;
+#[cfg(target_os = "macos")]
+mod slim_mac;
+pub mod status;
 pub mod suggest;
 pub mod temp;
 pub mod worktrees;
@@ -23,6 +30,8 @@ use tauri::ipc::Channel;
 pub struct CleanState {
     scan_cancel: Mutex<Option<Arc<AtomicBool>>>,
     apps: Mutex<Vec<App>>,
+    /// Kept between samples: activity is measured against the previous one.
+    status: Mutex<Option<status::Sampler>>,
 }
 
 #[derive(Serialize)]
@@ -92,7 +101,9 @@ pub fn clean_scan(state: tauri::State<'_, CleanState>, events: Channel<ScanEvent
             let roots = scan::roots();
             match scan::Scanner::new(&cancel, &mut progress).run(&roots) {
                 Some(result) => {
-                    let suggestions = suggest::suggestions(&result);
+                    let protected = settings::protected();
+                    let mut suggestions = suggest::suggestions(&result, &suggest::Installed::current());
+                    suggestions.retain(|s| settings::protection(&s.path, &protected).is_none());
                     let worktrees = worktrees::find(&result);
                     let _ = events.send(ScanEvent::Done { emptied: temp::emptied_folders(), suggestions, worktrees, files: result.file_count, millis: result.millis, large_files: result.large_files, root: result.root });
                 }
@@ -118,13 +129,23 @@ pub struct RemoveItem {
     size: u64,
 }
 
-#[derive(Deserialize, PartialEq)]
+#[derive(Deserialize, PartialEq, Clone, Copy)]
 #[serde(rename_all = "camelCase")]
 pub enum Checks {
     /// Disk Cleaner: only inside the scanned folders, never protected ones.
     Cleaner,
     /// App Uninstaller: the finder's own results; live mounts are refused.
     Uninstaller,
+}
+
+impl Checks {
+    /// The tool's name in the history.
+    fn tool(self) -> &'static str {
+        match self {
+            Checks::Cleaner => "cleaner",
+            Checks::Uninstaller => "uninstaller",
+        }
+    }
 }
 
 #[derive(Serialize, Clone)]
@@ -141,22 +162,27 @@ pub enum RemoveEvent {
 pub fn clean_remove(items: Vec<RemoveItem>, mode: Mode, checks: Checks, events: Channel<RemoveEvent>) {
     std::thread::spawn(move || {
         let guard = (checks == Checks::Cleaner).then(|| guard::Guard::new(&scan::roots().into_iter().map(|r| r.path).collect::<Vec<_>>()));
+        let protected = settings::protected();
+        let emptied = temp::emptied_folders();
         for item in items {
             let _ = events.send(RemoveEvent::Start { path: item.path.clone() });
             if worktrees::is_docker(&item.path) {
                 let error = worktrees::remove_docker(&item.path).err();
+                if error.is_none() {
+                    settings::record(&[settings::Entry::now("delete", &item.path, item.size, checks.tool())]);
+                }
                 let _ = events.send(RemoveEvent::Outcome { path: item.path, size: item.size, error, needs_admin: false });
                 continue;
             }
             // A worktree deleted for good is also dropped from its repository's list. One moved to
             // the Trash keeps its record, so putting it back still works.
             let worktree = (mode == Mode::Permanent).then(|| worktrees::link(&item.path)).flatten();
-            let refusal = match &guard {
+            let refusal = settings::protection(&item.path, &protected).or_else(|| match &guard {
                 Some(guard) => guard.refusal(&item.path),
                 None if fsx::is_mount_point(&item.path) => Some("It's a mounted volume. Quit the app, then try again.".into()),
                 None if !fsx::exists(&item.path) => Some("It no longer exists.".into()),
                 None => None,
-            };
+            });
             let (error, needs_admin) = match refusal {
                 Some(r) => (Some(r), false),
                 None => match remove::remove(&item.path, mode) {
@@ -164,6 +190,9 @@ pub fn clean_remove(items: Vec<RemoveItem>, mode: Mode, checks: Checks, events: 
                         if let Some(link) = &worktree {
                             worktrees::forget(link, &item.path);
                         }
+                        // The Trash and Windows' temp folder are emptied for good, whatever the mode.
+                        let for_good = mode == Mode::Permanent || emptied.iter().any(|f| fsx::key(f) == fsx::key(&item.path));
+                        settings::record(&[settings::Entry::now(if for_good { "delete" } else { "trash" }, &item.path, item.size, checks.tool())]);
                         (None, false)
                     }
                     Err(f) => (Some(f.message), f.needs_admin),
@@ -175,9 +204,104 @@ pub fn clean_remove(items: Vec<RemoveItem>, mode: Mode, checks: Checks, events: 
     });
 }
 
+/// Retries, with administrator rights, the items the account couldn't remove itself.
 #[tauri::command]
-pub async fn clean_remove_admin(paths: Vec<String>, mode: Mode) -> AdminResult {
-    tauri::async_runtime::spawn_blocking(move || remove::as_admin(&paths, mode)).await.unwrap_or(AdminResult::Failed { message: "The administrator command failed.".into() })
+pub async fn clean_remove_admin(items: Vec<RemoveItem>, mode: Mode, checks: Checks) -> AdminResult {
+    let work = move || {
+        let protected = settings::protected();
+        let allowed: Vec<&RemoveItem> = items.iter().filter(|i| settings::protection(&i.path, &protected).is_none() && fsx::exists(&i.path)).collect();
+        let paths: Vec<String> = allowed.iter().map(|i| i.path.clone()).collect();
+        let result = remove::as_admin(&paths, mode);
+        let gone: Vec<settings::Entry> = allowed.iter().filter(|i| !fsx::exists(&i.path)).map(|i| settings::Entry::now(if mode == Mode::Permanent { "delete" } else { "trash" }, &i.path, i.size, checks.tool())).collect();
+        settings::record(&gone);
+        result
+    };
+    tauri::async_runtime::spawn_blocking(work).await.unwrap_or(AdminResult::Failed { message: "The administrator command failed.".into() })
+}
+
+// MARK: Never clean, history
+
+#[tauri::command]
+pub fn protected_list() -> Vec<String> {
+    settings::protected()
+}
+
+#[tauri::command]
+pub fn protected_set(paths: Vec<String>) -> Result<Vec<String>, String> {
+    settings::set_protected(&paths)?;
+    Ok(settings::protected())
+}
+
+#[tauri::command(async)]
+pub fn history_list() -> Vec<settings::Entry> {
+    settings::history()
+}
+
+#[tauri::command]
+pub fn history_clear() {
+    settings::clear_history();
+}
+
+// MARK: Status
+
+/// One reading of the system. The first of a session reads as idle: activity is measured
+/// since the reading before.
+#[tauri::command(async)]
+pub fn status_sample(state: tauri::State<'_, CleanState>) -> Result<status::Status, String> {
+    let disk = storage();
+    let mut sampler = state.status.lock().unwrap();
+    if sampler.is_none() {
+        *sampler = Some(status::Sampler::new()?);
+        // Processor use needs two looks a moment apart.
+        std::thread::sleep(std::time::Duration::from_millis(250));
+    }
+    Ok(sampler.as_mut().unwrap().sample(disk.total, disk.available))
+}
+
+// MARK: Maintenance
+
+#[tauri::command(async)]
+pub fn maintain_tasks() -> Vec<maintain::Task> {
+    maintain::tasks()
+}
+
+#[tauri::command]
+pub fn maintain_run(ids: Vec<String>, events: Channel<maintain::Event>) {
+    std::thread::spawn(move || {
+        maintain::run(&ids, &|event| {
+            let _ = events.send(event);
+        });
+    });
+}
+
+#[tauri::command]
+pub fn slim_supported() -> bool {
+    slim::supported()
+}
+
+/// Apps whose Intel half can go, as they are found.
+#[tauri::command]
+pub fn slim_list(events: Channel<slim::Event>) {
+    std::thread::spawn(move || {
+        slim::list(&|event| {
+            let _ = events.send(event);
+        });
+    });
+}
+
+#[tauri::command]
+pub fn slim_run(ids: Vec<String>, events: Channel<slim::Event>) {
+    std::thread::spawn(move || {
+        for id in ids {
+            let _ = events.send(slim::Event::Start { id: id.clone() });
+            let result = slim::slim(&id);
+            if let Ok(freed) = &result {
+                settings::record(&[settings::Entry::now("slim", &id, *freed, "maintenance")]);
+            }
+            let _ = events.send(slim::Event::Outcome { id, freed: *result.as_ref().unwrap_or(&0), error: result.err() });
+        }
+        let _ = events.send(slim::Event::Finished);
+    });
 }
 
 /// Where each worktree's branch stands and which Docker containers, volumes and images are its own.

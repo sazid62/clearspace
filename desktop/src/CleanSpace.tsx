@@ -1,22 +1,32 @@
 import { useEffect, useSyncExternalStore } from "react";
 import { AnimatePresence, motion } from "motion/react";
-import { HardDrive, PackageX, ShieldAlert, ShieldCheck } from "lucide-react";
+import { Activity, HardDrive, History as HistoryIcon, PackageX, ShieldAlert, ShieldCheck, Wrench } from "lucide-react";
 import { api, bytes, type Storage } from "./clean/api";
 import { CleanerModel } from "./clean/cleanerModel";
 import { UninstallerModel } from "./clean/uninstallerModel";
+import { MaintenanceModel } from "./clean/maintenanceModel";
 import { DiskCleaner } from "./clean/DiskCleaner";
 import { Uninstaller } from "./clean/Uninstaller";
+import { Maintenance } from "./clean/Maintenance";
+import { Status, StatusModel } from "./clean/Status";
+import { History, HistoryModel } from "./clean/History";
 import { UsageBar } from "./clean/ui";
 
-export type Tool = "cleaner" | "uninstaller";
+export type Tool = "cleaner" | "uninstaller" | "maintenance" | "status" | "history";
 
 const TOOLS: { id: Tool; title: string; icon: typeof HardDrive }[] = [
   { id: "cleaner", title: "Disk Cleaner", icon: HardDrive },
   { id: "uninstaller", title: "App Uninstaller", icon: PackageX },
+  { id: "maintenance", title: "Maintenance", icon: Wrench },
+  { id: "status", title: "Status", icon: Activity },
+  { id: "history", title: "History", icon: HistoryIcon },
 ];
 
 export const cleaner = new CleanerModel();
 export const uninstaller = new UninstallerModel();
+export const maintenance = new MaintenanceModel();
+export const status = new StatusModel();
+export const history = new HistoryModel();
 
 /** Disk capacity, shared by the sidebar footer and the cleaner; refreshed after removals and on focus. */
 class StorageStore {
@@ -39,6 +49,7 @@ class StorageStore {
 export const storage = new StorageStore();
 cleaner.onFilesRemoved = storage.refresh;
 uninstaller.onFilesRemoved = storage.refresh;
+maintenance.onChanged = storage.refresh;
 
 function useStorage() {
   useEffect(() => {
@@ -107,7 +118,11 @@ export function CleanDetail({ tool }: { tool: Tool }) {
         exit={{ opacity: 0 }}
         transition={{ opacity: { duration: 0.16 }, y: { type: "spring", stiffness: 380, damping: 32 } }}
       >
-        {tool === "cleaner" ? <DiskCleaner model={cleaner} storage={info} /> : <Uninstaller model={uninstaller} />}
+        {tool === "cleaner" && <DiskCleaner model={cleaner} storage={info} />}
+        {tool === "uninstaller" && <Uninstaller model={uninstaller} />}
+        {tool === "maintenance" && <Maintenance model={maintenance} />}
+        {tool === "status" && <Status model={status} />}
+        {tool === "history" && <History model={history} />}
       </motion.div>
     </AnimatePresence>
   );
