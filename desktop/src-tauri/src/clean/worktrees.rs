@@ -109,7 +109,7 @@ pub fn forget(link: &Link, path: &str) {
         return;
     }
     let back = std::fs::read_to_string(fsx::join(&link.admin, "gitdir")).unwrap_or_default();
-    if fsx::key(&absolute(&link.admin, back.trim())) != fsx::key(&fsx::join(path, ".git")) {
+    if fsx::key(&absolute(&link.admin, back.trim())) != fsx::key(&absolute(path, ".git")) {
         return; // the record points somewhere else
     }
     if std::fs::remove_dir_all(&link.admin).is_ok() {

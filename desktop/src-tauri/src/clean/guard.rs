@@ -112,7 +112,9 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("cs-guard-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.to_string_lossy().into_owned();
-        assert_eq!(guard.refusal(&path).as_deref(), Some("It's outside the scanned folders."));
+        // Windows keeps its temp folder inside the home folder, so scan somewhere else.
+        let elsewhere = Guard::new(&[fsx::join(&path, "elsewhere")]);
+        assert_eq!(elsewhere.refusal(&path).as_deref(), Some("It's outside the scanned folders."));
         let inner = Guard::new(&[fsx::parent(&path)]);
         assert_eq!(inner.refusal(&path), None);
         std::fs::remove_dir_all(dir).unwrap();
