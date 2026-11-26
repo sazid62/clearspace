@@ -223,7 +223,7 @@ impl<'a> Finder<'a> {
         self.mentions.sort();
         self.mentions.dedup();
         let never = vec![self.user_library.clone(), self.system_library.clone()];
-        let mut leftovers = self.hits.finish(&never);
+        let mut leftovers = self.hits.finish(&[], &never);
         leftovers.retain(|l| !l.path.starts_with("/System/"));
         for l in &mut leftovers {
             l.kind = kind(&l.path, app, &self.user_library, &self.system_library, &self.receipts, &self.bin_dirs, &self.home);

@@ -2,7 +2,7 @@
 // Runs the app's built-in self-test (setup, then quit and reopen to restore) and checks the logs.
 // Usage: node scripts/selftest.mjs <path to the app binary> [output folder]
 // Used by CI on macOS, Windows and Ubuntu; works locally too.
-import { spawn } from "node:child_process";
+import { spawn, execFileSync } from "node:child_process";
 import { mkdtempSync, readFileSync, existsSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
@@ -34,6 +34,42 @@ mkdirSync(join(fixture, ".hidden", "feature"), { recursive: true });
 writeFileSync(join(admin, "HEAD"), "ref: refs/heads/feat/login\n");
 writeFileSync(join(fixture, ".hidden", "feature", ".git"), `gitdir: ${admin.replaceAll("\\", "/")}\n`);
 writeFileSync(join(fixture, ".hidden", "feature", "code.txt"), "x");
+
+// An installed app of the test's own for the App Uninstaller: the machine's apps differ, and one
+// with nothing left behind has nothing to remove. macOS inspects an app already in /Applications.
+const appName = `Selftest Fixture ${process.pid}`;
+const appId = `selftest-fixture-${process.pid}`;
+const appFiles = [];
+const registryKey = `HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\${appId}`;
+if (process.platform === "linux") {
+  const config = process.env.XDG_CONFIG_HOME || join(homedir(), ".config");
+  const entries = join(process.env.XDG_DATA_HOME || join(homedir(), ".local", "share"), "applications");
+  mkdirSync(join(config, appId), { recursive: true });
+  mkdirSync(entries, { recursive: true });
+  writeFileSync(join(config, appId, "settings"), "x");
+  writeFileSync(join(entries, `${appId}.desktop`), `[Desktop Entry]\nType=Application\nName=${appName}\nExec=/opt/${appId}/${appId}\n`);
+  appFiles.push(join(config, appId), join(entries, `${appId}.desktop`));
+}
+if (process.platform === "win32") {
+  const data = join(process.env.APPDATA || join(homedir(), "AppData", "Roaming"), appName);
+  mkdirSync(data, { recursive: true });
+  writeFileSync(join(data, "settings.txt"), "x");
+  appFiles.push(data);
+  for (const [name, value] of [["DisplayName", appName], ["UninstallString", "cmd.exe /c exit 0"]]) {
+    execFileSync("reg", ["add", registryKey, "/v", name, "/d", value, "/f"], { stdio: "ignore" });
+  }
+}
+function cleanUp() {
+  rmSync(fixture, { recursive: true, force: true });
+  for (const file of appFiles) rmSync(file, { recursive: true, force: true });
+  if (process.platform === "win32") {
+    try {
+      execFileSync("reg", ["delete", registryKey, "/f"], { stdio: "ignore" });
+    } catch {
+      // already gone
+    }
+  }
+}
 
 function run(scenario) {
   return new Promise((resolve) => {
@@ -81,6 +117,8 @@ const checks = {
     /^guard on scanned folder: This folder is protected\.$/m,
     ...(process.platform === "darwin" ? [/^icon handler: 200 image\/png \d{3,} bytes$/m] : []),
     /^apps loaded: true$/m,
+    ...(process.platform === "linux" ? [/^inspected Selftest Fixture \d+: true$/m, /^leftovers: 2 \((?=.*shortcuts)(?=.*preferences)/m] : []),
+    ...(process.platform === "win32" ? [/^inspected Selftest Fixture \d+: true$/m, /^leftovers: 1 \(appData\)/m] : []),
     /^uninstall confirm open: true$/m,
     /^nothing removed: true$/m,
   ],
@@ -107,6 +145,6 @@ for (const scenario of ["setup", "restore", "clean"]) {
     }
   }
 }
-rmSync(fixture, { recursive: true, force: true });
+cleanUp();
 console.log(failed ? `\n${failed} check(s) failed. Snapshots and logs: ${out}` : `\nAll checks passed. Snapshots and logs: ${out}`);
 process.exit(failed ? 1 : 0);

@@ -158,7 +158,7 @@ pub fn inspect(app: &App, _all: &[App]) -> Inspection {
         }
     }
     let never = vec![roaming, local, program_data, home];
-    Inspection { leftovers: hits.finish(&never), mentions: vec![] }
+    Inspection { leftovers: hits.finish(&never, &[]), mentions: vec![] }
 }
 
 /// Names the program's folders go by: its display name with and without the version, and the

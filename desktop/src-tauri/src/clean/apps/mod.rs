@@ -92,13 +92,16 @@ impl Hits {
         }
     }
 
-    pub fn finish(self, never: &[String]) -> Vec<Leftover> {
+    /// `never` are folders that are never one app's to remove (~/.config itself). The folders
+    /// right inside each of `libraries` aren't either (~/Library/Caches).
+    pub fn finish(self, never: &[String], libraries: &[String]) -> Vec<Leftover> {
         let mut paths: Vec<&String> = self.hits.keys().collect();
         paths.sort();
         let mut kept: Vec<String> = vec![];
         for path in paths {
-            if never.iter().any(|n| fsx::key(n) == fsx::key(path) || fsx::key(&fsx::parent(path)) == fsx::key(n)) {
-                continue; // a top-level folder (~/Library/Caches itself) is never one app's to remove
+            let shared = never.iter().chain(libraries).any(|n| fsx::key(n) == fsx::key(path)) || libraries.iter().any(|l| fsx::key(&fsx::parent(path)) == fsx::key(l));
+            if shared {
+                continue;
             }
             if kept.iter().any(|k| fsx::inside(path, k)) {
                 continue;
@@ -150,4 +153,27 @@ pub fn mentions(needles: &[String], word: &str) -> Vec<String> {
         }
     }
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn keeps_an_apps_folder_but_never_a_shared_one() {
+        let dir = std::env::temp_dir().join(format!("cs-hits-{}", std::process::id()));
+        let root = dir.to_string_lossy().into_owned();
+        let config = fsx::join(&root, "config");
+        let library = fsx::join(&root, "Library");
+        for folder in [fsx::join(&config, "app/inner"), fsx::join(&library, "Caches/app")] {
+            std::fs::create_dir_all(folder).unwrap();
+        }
+        let mut hits = Hits::default();
+        for path in [config.clone(), fsx::join(&config, "app"), fsx::join(&config, "app/inner"), library.clone(), fsx::join(&library, "Caches"), fsx::join(&library, "Caches/app")] {
+            hits.add(&path, "support", Confidence::Exact);
+        }
+        let found: Vec<String> = hits.finish(&[config.clone()], &[library.clone()]).into_iter().map(|l| l.path).collect();
+        assert_eq!(found, [fsx::join(&library, "Caches/app"), fsx::join(&config, "app")]);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
 }

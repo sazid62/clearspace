@@ -304,7 +304,8 @@ async function cleanScenario() {
   log(`apps: ${apps.length}, first: ${apps.slice(0, 5).map((a) => a.name).join(", ")}`);
   await sleep(1500);
   await snap("c7-app-list");
-  const target = apps.find((a) => a.uninstaller === null && !/clearspace/i.test(a.name)) ?? apps[0];
+  // Linux and Windows get an app from the self-test script; macOS takes one that's installed.
+  const target = apps.find((a) => a.name.startsWith("Selftest Fixture ")) ?? apps.find((a) => a.uninstaller === null && !/clearspace/i.test(a.name)) ?? apps[0];
   if (target) {
     uninstaller.select(target.id);
     log(`inspected ${target.name}: ${await until(() => !uninstaller.getSnapshot().searching, 30000)}`);

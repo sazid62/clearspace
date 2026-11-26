@@ -280,7 +280,7 @@ pub fn inspect(app: &App, _all: &[App]) -> Inspection {
     needles.extend(x.appimage.clone());
     let word = x.program.as_deref().map(fsx::name).unwrap_or_else(|| app.name.clone());
     let never = vec![home.clone(), config, cache, data, state, fsx::join(&home, ".var/app"), fsx::join(&home, "snap")];
-    Inspection { leftovers: hits.finish(&never), mentions: super::mentions(&needles, &word) }
+    Inspection { leftovers: hits.finish(&never, &[]), mentions: super::mentions(&needles, &word) }
 }
 
 /// Folder names the app's files go by: its program, desktop id (and its last part), and name.
