@@ -18,6 +18,8 @@ export interface LargeFile {
   size: number;
   /** Seconds since 1970. */
   modified: number;
+  /** Seconds since 1970 when it was last opened or changed. */
+  used: number;
 }
 
 export type Safety = "safe" | "review";

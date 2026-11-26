@@ -63,7 +63,10 @@ Besides known caches, project build folders, worktrees and temp leftovers, the s
   `GPUCache`…); offline web copies (`CacheStorage`) are marked *Review*;
 - what removed apps left: on macOS, containers, saved window state and Application Support folders
   named after an identifier no installed app has (Spotlight is asked too, for apps kept elsewhere);
-  on Linux, data of Flatpak apps and snaps no longer installed. Always *Review*.
+  on Linux, data of Flatpak apps and snaps no longer installed. Always *Review*;
+- old files: over 100 MB, not opened or changed in six months, in Documents, Desktop, Downloads,
+  Movies/Videos, Music or Pictures only (elsewhere big files belong to tools that use them unseen).
+  Always *Review*. Where the system doesn't record opening, the change time is used.
 
 **Never clean** (the lock button, or right-click › Never Clean This) keeps a file or folder, and
 everything in it, out of the suggestions and refuses to remove it from either tool.

@@ -234,7 +234,7 @@ function Suggestions({ model }: { model: CleanerModel }) {
   return (
     <>
       <Hint action={safe > 0 && <button className="pill-button" onClick={() => model.selectAllSafe()}>Select All Safe ({bytes(safe)})</button>}>
-        Caches and logs, what removed apps left behind, project build folders, git worktrees, temp leftovers, videos and downloads. <b>Safe</b> items come back on their own; check the rest before removing. Quit an app before removing its cache.
+        Caches and logs, what removed apps left behind, project build folders, git worktrees, temp leftovers, videos, downloads, and big files you haven't opened in six months. <b>Safe</b> items come back on their own; check the rest before removing. Quit an app before removing its cache.
       </Hint>
       <div className="clean-list">
         <LazyList
@@ -309,7 +309,7 @@ function LargeFiles({ model }: { model: CleanerModel }) {
         <LazyList
           items={files}
           resetKey={s.query}
-          render={(f) => <CleanerRow key={f.path} model={model} path={f.path} size={f.size} title={nameOf(f.path)} subtitle={`${abbreviate(parentOf(f.path))} · modified ${relative(f.modified)}`} fraction={f.size / largest} />}
+          render={(f) => <CleanerRow key={f.path} model={model} path={f.path} size={f.size} title={nameOf(f.path)} subtitle={`${abbreviate(parentOf(f.path))} · modified ${relative(f.modified)}${f.used > f.modified + 60 ? ` · opened ${relative(f.used)}` : ""}`} fraction={f.size / largest} />}
         />
         {files.length === 0 && (q ? <EmptyList title="No matches" text={`No large file matches “${s.query}”.`} /> : <EmptyList title="No large files" text="No single file over 20 MB was found." />)}
       </div>

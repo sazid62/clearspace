@@ -310,6 +310,10 @@ const BUNDLES: [&str; 14] = ["app", "photoslibrary", "fcpbundle", "imovielibrary
 const VIDEOS: [&str; 14] = ["mp4", "m4v", "mov", "mkv", "avi", "wmv", "flv", "webm", "mpg", "mpeg", "ts", "m2ts", "vob", "3gp"];
 const INSTALLERS: [&str; 22] = ["dmg", "pkg", "mpkg", "iso", "xip", "zip", "rar", "7z", "tar", "gz", "tgz", "bz2", "xz", "apk", "aab", "ipa", "exe", "msi", "deb", "rpm", "appimage", "flatpak"];
 
+/// A big file nobody has opened in half a year is offered for review.
+const OLD_SIZE: u64 = 100 * 1024 * 1024;
+const OLD_AFTER: i64 = 182 * 86400;
+
 struct Detector<'a> {
     result: &'a ScanResult,
     home: String,
@@ -445,6 +449,9 @@ impl<'a> Detector<'a> {
 
     fn files(&self) -> Vec<Suggestion> {
         let downloads = [fsx::join(&self.home, "Downloads"), fsx::join(&self.home, "Desktop")];
+        // Old files are looked for only where people keep their own: elsewhere in the home folder
+        // big files belong to tools (virtual machines, container disks, models) that use them unseen.
+        let personal: Vec<String> = ["Documents", "Desktop", "Downloads", "Movies", "Videos", "Music", "Pictures"].iter().map(|f| fsx::join(&self.home, f)).collect();
         let mut out = vec![];
         for file in &self.result.large_files {
             if !self.is_user_area(&file.path) {
@@ -460,6 +467,9 @@ impl<'a> Detector<'a> {
                 (format!("Installer or archive · {name}"), format!("Downloaded {when}. Not needed once the app is installed or the archive is unpacked."))
             } else if in_downloads {
                 (format!("Download · {name}"), format!("Downloaded {when}. Delete if you no longer need it."))
+            } else if file.size >= OLD_SIZE && self.now - file.used >= OLD_AFTER && personal.iter().any(|p| fsx::inside(&file.path, p)) {
+                let used = fsx::relative(file.used, self.now);
+                (format!("Old file · {name}"), format!("Last opened or changed {used}. Delete it, or move it to an external drive, if you no longer need it here."))
             } else {
                 continue;
             };
@@ -502,7 +512,7 @@ impl<'a> Detector<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::clean::scan::{Item, Node};
+    use crate::clean::scan::{Item, LargeFile, Node};
 
     fn scanned(folders: &[&str]) -> ScanResult {
         let home = fsx::home();
@@ -612,5 +622,22 @@ mod tests {
                 "Logs · Editor [Safe]",
             ]
         );
+    }
+
+    #[test]
+    fn offers_big_files_left_unopened_for_half_a_year() {
+        let home = fsx::home();
+        let now = fsx::now_secs();
+        let file = |rel: &str, mb: u64, days: i64| LargeFile { path: fsx::join(&home, rel), size: mb * 1024 * 1024, modified: now - 400 * 86400, used: now - days * 86400 };
+        let mut result = scanned(&[]);
+        result.large_files = vec![
+            file("Documents/backup.sparsebundle.img", 900, 300),
+            file("Documents/recent.img", 900, 10),
+            file("Documents/small.img", 60, 300),
+            file(".hidden/old.img", 900, 300),
+            file("OrbStack/docker/containers/db/usr/lib/libLLVM.so", 900, 300),
+        ];
+        let found: Vec<(String, Safety)> = Detector::new(&result).files().into_iter().map(|s| (s.title, s.safety)).collect();
+        assert_eq!(found, [("Old file · backup.sparsebundle.img".to_string(), Safety::Review)]);
     }
 }
